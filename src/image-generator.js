@@ -125,11 +125,36 @@ export async function generateEyecatch(keyword, title, outputDir) {
 }
 
 /**
- * h2見出し用の図解画像を生成
+ * キーワードがハウツー系（始め方、やり方、使い方 等）か判定
  */
-export async function generateDiagrams(outline, outputDir) {
+function isHowToKeyword(keyword) {
+  if (!keyword) return false;
+  const patterns = [
+    '始め方', 'やり方', '使い方', '方法', '手順', 'ステップ',
+    '設定方法', '登録方法', '導入方法', '使用方法', '操作方法',
+    '始める', 'インストール', 'セットアップ', '設定',
+    '登録', '申し込み', '開設', '作り方', '作成方法',
+    'how to', 'tutorial', 'setup', 'install',
+  ];
+  const kw = keyword.toLowerCase();
+  return patterns.some(p => kw.includes(p));
+}
+
+/**
+ * h2見出し用の図解画像を生成
+ * @param {Array} outline - 見出し構成
+ * @param {string} outputDir - 出力先
+ * @param {string} keyword - キーワード（ハウツー判定用）
+ */
+export async function generateDiagrams(outline, outputDir, keyword = '') {
   mkdirSync(outputDir, { recursive: true });
-  const template = loadPrompt('image-diagram');
+
+  // キーワードがハウツー系ならスクショ風、それ以外は図解
+  const useScreenshot = isHowToKeyword(keyword);
+  const templateName = useScreenshot ? 'image-screenshot' : 'image-diagram';
+  const template = loadPrompt(templateName);
+  logger.info(`図解スタイル: ${useScreenshot ? 'スクショ風（ハウツー系）' : '図解/インフォグラフィック'}`);
+
   const results = [];
 
   // 図解用の参照画像を読み込み（全図解で共通）
@@ -153,6 +178,7 @@ export async function generateDiagrams(outline, outputDir) {
       diagramDescription: description,
       sectionH2: section.h2,
       sectionH3s: section.h3s.join(', '),
+      keyword: keyword || '',
     });
 
     // API負荷軽減のため間隔を空ける
@@ -178,8 +204,8 @@ export async function generateAllImages(article) {
   // アイキャッチ生成
   const eyecatchPath = await generateEyecatch(article.keyword, article.title, outputDir);
 
-  // 図解生成
-  const diagrams = await generateDiagrams(article.outline, outputDir);
+  // 図解生成（キーワードでハウツー系判定→スクショ風に切替）
+  const diagrams = await generateDiagrams(article.outline, outputDir, article.keyword);
 
   const successCount = diagrams.filter((d) => d.imagePath).length;
   logger.info(
