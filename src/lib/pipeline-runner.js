@@ -57,11 +57,11 @@ function onProgress({ step, message, progress, keyword, title }) {
 /** パイプラインを開始 */
 export async function startPipeline(options = {}) {
   if (state.running) {
-    // 3分以上経過している場合は強制リセット（ハングアップ対策）
+    // 15分以上経過している場合は強制リセット（ハングアップ対策）
     const elapsed = state.startedAt
       ? (Date.now() - new Date(state.startedAt).getTime()) / 1000
       : 0;
-    if (elapsed > 180) {
+    if (elapsed > 900) {
       state.running = false;
       addLog('warn', '前回のパイプラインがタイムアウトしました。強制リセットします。');
     } else {
