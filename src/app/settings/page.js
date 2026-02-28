@@ -9,6 +9,7 @@ const FREQUENCY_OPTIONS = [
 ];
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
+const MINUTES = [0, 10, 20, 30, 40, 50];
 
 const IMAGE_MODELS = [
   { value: 'gemini-3.1-flash-image-preview', label: 'Gemini 3.1 Flash Image (推奨・高速)' },
@@ -34,7 +35,9 @@ export default function SettingsPage() {
   // スケジュールUI用
   const [frequency, setFrequency] = useState('daily1');
   const [hour1, setHour1] = useState(9);
+  const [min1, setMin1] = useState(0);
   const [hour2, setHour2] = useState(15);
+  const [min2, setMin2] = useState(0);
 
   // 対話型セッション用
   const [sessionState, setSessionState] = useState({
@@ -238,7 +241,9 @@ export default function SettingsPage() {
       const parsed = parseCronSimple(cron);
       setFrequency(parsed.frequency);
       setHour1(parsed.hour1);
+      setMin1(parsed.min1);
       setHour2(parsed.hour2);
+      setMin2(parsed.min2);
     } catch (err) {
       console.error('設定取得エラー:', err);
     } finally {
@@ -354,7 +359,7 @@ export default function SettingsPage() {
     setSaving(true);
     setMessage('');
 
-    const cron = buildCronSimple({ frequency, hour1, hour2 });
+    const cron = buildCronSimple({ frequency, hour1, min1, hour2, min2 });
     const updates = {
       'article.minLength': settings.article.minLength,
       'article.maxLength': settings.article.maxLength,
@@ -408,7 +413,7 @@ export default function SettingsPage() {
     return <div className="text-center text-gray-500 py-12">読み込み中...</div>;
   }
 
-  const cronDescription = describeCronSimple({ frequency, hour1, hour2 });
+  const cronDescription = describeCronSimple({ frequency, hour1, min1, hour2, min2 });
 
   return (
     <div className="max-w-2xl">
@@ -714,28 +719,54 @@ export default function SettingsPage() {
           </Field>
 
           <Field label="1回目の時刻">
-            <select
-              value={hour1}
-              onChange={(e) => setHour1(parseInt(e.target.value))}
-              className="input-field"
-            >
-              {HOURS.map((h) => (
-                <option key={h} value={h}>{h}:00</option>
-              ))}
-            </select>
+            <div className="flex gap-2 items-center">
+              <select
+                value={hour1}
+                onChange={(e) => setHour1(parseInt(e.target.value))}
+                className="input-field"
+                style={{ width: 'auto', minWidth: '5rem' }}
+              >
+                {HOURS.map((h) => (
+                  <option key={h} value={h}>{h}時</option>
+                ))}
+              </select>
+              <select
+                value={min1}
+                onChange={(e) => setMin1(parseInt(e.target.value))}
+                className="input-field"
+                style={{ width: 'auto', minWidth: '5rem' }}
+              >
+                {MINUTES.map((m) => (
+                  <option key={m} value={m}>{String(m).padStart(2, '0')}分</option>
+                ))}
+              </select>
+            </div>
           </Field>
 
           {frequency === 'daily2' && (
             <Field label="2回目の時刻">
-              <select
-                value={hour2}
-                onChange={(e) => setHour2(parseInt(e.target.value))}
-                className="input-field"
-              >
-                {HOURS.map((h) => (
-                  <option key={h} value={h}>{h}:00</option>
-                ))}
-              </select>
+              <div className="flex gap-2 items-center">
+                <select
+                  value={hour2}
+                  onChange={(e) => setHour2(parseInt(e.target.value))}
+                  className="input-field"
+                  style={{ width: 'auto', minWidth: '5rem' }}
+                >
+                  {HOURS.map((h) => (
+                    <option key={h} value={h}>{h}時</option>
+                  ))}
+                </select>
+                <select
+                  value={min2}
+                  onChange={(e) => setMin2(parseInt(e.target.value))}
+                  className="input-field"
+                  style={{ width: 'auto', minWidth: '5rem' }}
+                >
+                  {MINUTES.map((m) => (
+                    <option key={m} value={m}>{String(m).padStart(2, '0')}分</option>
+                  ))}
+                </select>
+              </div>
             </Field>
           )}
 
@@ -912,43 +943,86 @@ function Field({ label, children }) {
 
 // --- ヘルパー関数（クライアントサイド） ---
 
-function buildCronSimple({ frequency, hour1, hour2 }) {
+function buildCronSimple({ frequency, hour1, min1 = 0, hour2, min2 = 0 }) {
   const h1 = Math.min(23, Math.max(0, parseInt(hour1) || 0));
+  const m1 = Math.min(50, Math.max(0, parseInt(min1) || 0));
+
   switch (frequency) {
     case 'daily2': {
       const h2 = Math.min(23, Math.max(0, parseInt(hour2) || 15));
-      const hours = [h1, h2].sort((a, b) => a - b).join(',');
-      return `0 ${hours} * * *`;
+      const m2v = Math.min(50, Math.max(0, parseInt(min2) || 0));
+      // 2つの時刻を分離したcron式: "分1 時1,分2 時2" は非対応なので
+      // 時が同じなら分をカンマ区切り、違えば2つのcron式を";"で連結
+      if (h1 === h2) {
+        const mins = [m1, m2v].sort((a, b) => a - b).join(',');
+        return `${mins} ${h1} * * *`;
+      }
+      // 異なる時・分の場合は ";" 区切りで2つのスケジュール
+      return `${m1} ${h1} * * *;${m2v} ${h2} * * *`;
     }
     case 'weekday':
-      return `0 ${h1} * * 1-5`;
+      return `${m1} ${h1} * * 1-5`;
     default:
-      return `0 ${h1} * * *`;
+      return `${m1} ${h1} * * *`;
   }
 }
 
 function parseCronSimple(cron) {
-  if (!cron) return { frequency: 'daily1', hour1: 9, hour2: 15 };
+  const defaults = { frequency: 'daily1', hour1: 9, min1: 0, hour2: 15, min2: 0 };
+  if (!cron) return defaults;
+
+  // ";" 区切り（2スケジュール）
+  if (cron.includes(';')) {
+    const [c1, c2] = cron.split(';').map(s => s.trim());
+    const p1 = c1.split(' ');
+    const p2 = c2.split(' ');
+    return {
+      frequency: 'daily2',
+      hour1: parseInt(p1[1]) || 9,
+      min1: parseInt(p1[0]) || 0,
+      hour2: parseInt(p2[1]) || 15,
+      min2: parseInt(p2[0]) || 0,
+    };
+  }
+
   const parts = cron.split(' ');
-  if (parts.length !== 5) return { frequency: 'daily1', hour1: 9, hour2: 15 };
-  const [, hourStr, , , dow] = parts;
+  if (parts.length !== 5) return defaults;
+  const [minStr, hourStr, , , dow] = parts;
+
   const hours = hourStr.split(',').map(Number);
+  const mins = minStr.split(',').map(Number);
+
+  if (hours.length > 1) {
+    return {
+      frequency: 'daily2',
+      hour1: hours[0] || 9,
+      min1: mins[0] || 0,
+      hour2: hours[1] || 15,
+      min2: mins[1] || mins[0] || 0,
+    };
+  }
+
   return {
-    frequency: dow === '1-5' ? 'weekday' : hours.length > 1 ? 'daily2' : 'daily1',
+    frequency: dow === '1-5' ? 'weekday' : 'daily1',
     hour1: hours[0] || 9,
-    hour2: hours[1] || 15,
+    min1: mins[0] || 0,
+    hour2: 15,
+    min2: 0,
   };
 }
 
-function describeCronSimple({ frequency, hour1, hour2 }) {
+function describeCronSimple({ frequency, hour1, min1 = 0, hour2, min2 = 0 }) {
   const h1 = parseInt(hour1) || 0;
+  const m1 = String(parseInt(min1) || 0).padStart(2, '0');
   const h2 = parseInt(hour2) || 15;
+  const m2 = String(parseInt(min2) || 0).padStart(2, '0');
+
   switch (frequency) {
     case 'daily2':
-      return `毎日 ${h1}:00 と ${h2}:00 に自動投稿`;
+      return `毎日 ${h1}:${m1} と ${h2}:${m2} に自動投稿`;
     case 'weekday':
-      return `平日 ${h1}:00 に自動投稿`;
+      return `平日 ${h1}:${m1} に自動投稿`;
     default:
-      return `毎日 ${h1}:00 に自動投稿`;
+      return `毎日 ${h1}:${m1} に自動投稿`;
   }
 }
