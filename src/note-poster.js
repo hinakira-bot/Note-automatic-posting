@@ -85,16 +85,33 @@ async function login(context) {
   const page = await context.newPage();
 
   try {
-    // まずエディタに直接アクセス（セッションが有効ならそのまま開ける）
+    // まずnote.comにアクセスしてセッション状態を確認
     logger.info('セッション確認中...');
-    await page.goto(EDITOR_URL, { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+    await page.goto('https://note.com', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
     await page.waitForTimeout(2000);
 
-    const checkUrl = page.url();
-    if (checkUrl.includes('editor.note.com')) {
-      logger.info('既にログイン済みです');
-      await page.close();
-      return true;
+    // ログイン状態の確認（ログイン済みならアカウントメニュー等が存在）
+    const isLoggedIn = await page.evaluate(() => {
+      // note.comのログイン状態はcookieやDOM要素で判定
+      const hasAccountMenu = !!document.querySelector('[class*="UserMenu"], [class*="user-menu"], [class*="avatar"], a[href*="/mypage"]');
+      const hasLoginButton = !!document.querySelector('a[href="/login"], button:has(a[href="/login"])');
+      return hasAccountMenu || !hasLoginButton;
+    }).catch(() => false);
+
+    if (isLoggedIn) {
+      // ログイン済み - editor.note.comでもセッションが使えるか確認
+      logger.info('note.com にログイン済み。エディタアクセスを確認中...');
+      await page.goto(EDITOR_URL, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+      await page.waitForLoadState('networkidle').catch(() => {});
+      await page.waitForTimeout(2000);
+
+      const editorUrl = page.url();
+      if (editorUrl.includes('editor.note.com')) {
+        logger.info('セッション有効 - エディタにアクセスできました');
+        await page.close();
+        return true;
+      }
+      logger.info(`エディタにリダイレクトされませんでした: ${editorUrl}`);
     }
 
     // ログインが必要
