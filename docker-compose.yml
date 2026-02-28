@@ -1,0 +1,16 @@
+services:
+  note-tool:
+    build: .
+    container_name: note-tool
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./images:/app/images
+      - ./knowledge:/app/knowledge
+      - ./.env:/app/.env:ro
+    environment:
+      - NODE_ENV=production
+    mem_limit: 1g
