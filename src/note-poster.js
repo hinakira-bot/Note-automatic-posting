@@ -694,28 +694,54 @@ export async function postToNote(article, imageFiles) {
 
     // --- 「公開に進む」をクリック ---
     logger.info('公開ページへ移動中...');
-    const publishNavSelectors = [
-      'button:has-text("公開に進む")',
-      'button:has-text("公開設定")',
-      'button:has-text("投稿に進む")',
-      '[data-testid="publish-button"]',
-      'a:has-text("公開に進む")',
-    ];
 
-    let navigatedToPublish = false;
-    for (const sel of publishNavSelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await btn.click();
-          navigatedToPublish = true;
-          break;
-        }
-      } catch {}
-    }
+    // デバッグ: 現在のページのボタンを列挙
+    const visibleButtons = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      return buttons
+        .filter(b => b.offsetParent !== null)
+        .map(b => ({ text: b.textContent.trim().slice(0, 50), class: b.className.slice(0, 80) }))
+        .slice(0, 20);
+    }).catch(() => []);
+    logger.info(`エディタ上の表示ボタン: ${JSON.stringify(visibleButtons)}`);
 
-    if (!navigatedToPublish) {
-      logger.warn('「公開に進む」ボタンが見つかりません');
+    const proceedBtn = page.locator('button:has-text("公開に進む")').first();
+    try {
+      await proceedBtn.waitFor({ state: 'visible', timeout: 15000 });
+      // ボタンがenabledになるまで待機（本文入力完了でenabledになる）
+      for (let i = 0; i < 30; i++) {
+        if (await proceedBtn.isEnabled()) break;
+        await page.waitForTimeout(200);
+      }
+      await proceedBtn.click({ force: true });
+      logger.info('「公開に進む」をクリックしました');
+    } catch (e) {
+      logger.warn(`「公開に進む」ボタンが見つかりません: ${e.message}`);
+      // フォールバック: 他のセレクタを試行
+      const fallbackSelectors = [
+        'button:has-text("公開設定")',
+        'button:has-text("投稿に進む")',
+        'a:has-text("公開に進む")',
+      ];
+      let found = false;
+      for (const sel of fallbackSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await btn.click({ force: true });
+            logger.info(`フォールバックボタンをクリック: ${sel}`);
+            found = true;
+            break;
+          }
+        } catch {}
+      }
+      if (!found) {
+        // スクリーンショット保存
+        try {
+          await page.screenshot({ path: resolve(config.paths.logs, 'publish-button-failed.png'), fullPage: true });
+          logger.info('公開ボタン未検出のスクリーンショットを保存: logs/publish-button-failed.png');
+        } catch { /* ignore */ }
+      }
     }
 
     await page.waitForTimeout(3000);
@@ -728,35 +754,56 @@ export async function postToNote(article, imageFiles) {
 
     // --- 「投稿する」をクリック ---
     logger.info('記事を投稿中...');
-    const submitSelectors = [
-      'button:has-text("投稿する")',
-      'button:has-text("公開する")',
-      'button:has-text("公開")',
-      '[data-testid="submit-button"]',
-    ];
-
-    for (const sel of submitSelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await btn.click();
-          break;
-        }
-      } catch {}
+    const publishBtn = page.locator('button:has-text("投稿する")').first();
+    try {
+      await publishBtn.waitFor({ state: 'visible', timeout: 15000 });
+      // ボタンがenabledになるまで待機
+      for (let i = 0; i < 30; i++) {
+        if (await publishBtn.isEnabled()) break;
+        await page.waitForTimeout(200);
+      }
+      await publishBtn.click({ force: true });
+      logger.info('「投稿する」をクリックしました');
+    } catch (e) {
+      logger.warn(`「投稿する」ボタンが見つかりません: ${e.message}`);
+      // フォールバック
+      const fallbackSubmit = [
+        'button:has-text("公開する")',
+        'button:has-text("公開")',
+      ];
+      for (const sel of fallbackSubmit) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
+            await btn.click({ force: true });
+            logger.info(`フォールバック投稿ボタンをクリック: ${sel}`);
+            break;
+          }
+        } catch {}
+      }
     }
 
-    // 投稿完了を待機
-    await page.waitForTimeout(5000);
+    // 投稿完了を待機（URL変更 or 「投稿しました」メッセージ）
+    logger.info('投稿完了を待機中...');
+    await Promise.race([
+      page.waitForURL(url => !/\/publish/i.test(url.toString()) && !/\/edit/i.test(url.toString()), { timeout: 20000 }),
+      page.locator('text=投稿しました').first().waitFor({ timeout: 15000 }),
+      page.waitForTimeout(10000),
+    ]).catch(() => {});
 
-    // 確認ダイアログが出た場合
-    const confirmBtn = page.locator('button:has-text("OK"), button:has-text("投稿する"), button:has-text("公開する")').last();
-    if (await confirmBtn.isVisible().catch(() => false)) {
-      await confirmBtn.click({ force: true });
-      await page.waitForTimeout(5000);
-    }
+    await page.waitForTimeout(2000);
 
     const finalUrl = page.url();
-    logger.info(`投稿完了: ${finalUrl}`);
+    const isPublished = !finalUrl.includes('/edit') && !finalUrl.includes('/publish');
+    if (isPublished) {
+      logger.info(`投稿成功！記事URL: ${finalUrl}`);
+    } else {
+      logger.warn(`投稿が完了していない可能性があります。最終URL: ${finalUrl}`);
+      try {
+        await page.screenshot({ path: resolve(config.paths.logs, 'post-result.png'), fullPage: true });
+        logger.info('投稿結果のスクリーンショットを保存: logs/post-result.png');
+      } catch { /* ignore */ }
+    }
 
     // セッション保存
     try {
