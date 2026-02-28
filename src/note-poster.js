@@ -626,7 +626,17 @@ async function insertDiagramImage(page, imagePath, h2Text) {
   try {
     logger.info(`図解画像を挿入中: ${imagePath} (h2: ${h2Text || 'N/A'})`);
 
-    // === Step 1: カーソルを挿入位置に配置 ===
+    // === Step 1: エディタにフォーカスを確保 ===
+    const editor = page.locator('.ProseMirror').first();
+    const editorVisible = await editor.isVisible({ timeout: 3000 }).catch(() => false);
+    if (!editorVisible) {
+      logger.warn('ProseMirrorエディタが見つかりません');
+      return false;
+    }
+    await editor.click({ force: true });
+    await page.waitForTimeout(500);
+
+    // === Step 2: カーソルを挿入位置に配置 ===
     const placeholderFound = await page.evaluate((targetH2) => {
       const editor = document.querySelector('.ProseMirror') ||
                      document.querySelector('div[contenteditable="true"][role="textbox"]');
@@ -671,65 +681,150 @@ async function insertDiagramImage(page, imagePath, h2Text) {
     }, h2Text);
 
     if (placeholderFound === true) {
+      // プレースホルダーを削除して空の段落にする
       await page.keyboard.press('Backspace');
       await page.waitForTimeout(500);
       logger.info('プレースホルダーテキストを削除しました');
     } else if (placeholderFound === 'after_h2') {
+      // h2直後に新しい空行を作成してカーソルを配置
       await page.keyboard.press('Home');
       await page.keyboard.press('Enter');
       await page.keyboard.press('ArrowUp');
       await page.waitForTimeout(300);
       logger.info('h2直後にカーソルを配置しました');
     } else {
-      logger.warn('図解画像の挿入位置が見つかりません');
+      // 見つからない場合でもエディタ末尾に新しい行を作成
+      logger.warn('図解画像の挿入位置が見つかりません。エディタ末尾に挿入します');
+      await page.keyboard.press('End');
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
     }
 
-    // === Step 2: 「画像」ボタンを直接クリック ===
-    // ログ分析: 挿入メニューは自動表示済み、「画像」ボタンは常にDOMに存在
+    // === Step 3: スラッシュコマンドで画像を挿入（メインメソッド） ===
+    // ログ分析で判明:
+    //   - サイドバーの「画像」ボタンをクリックしてもfileChooserが開かない
+    //   - ProseMirrorのスラッシュコマンド（"/" 入力）→「画像」選択 でfileChooserが正常に開く
+    //   - スラッシュコマンドは空の段落で有効
     let uploaded = false;
 
-    // 全buttonを走査し、innerTextが「画像」完全一致のものをクリック
-    const allButtons = await page.locator('button').all();
-    logger.info(`ページ上のボタン総数: ${allButtons.length}`);
+    // 方法A: スラッシュコマンド（"/" を入力してメニューを開く）
+    for (let attempt = 0; attempt < 2 && !uploaded; attempt++) {
+      logger.info(`スラッシュコマンドで画像挿入を試みます (試行${attempt + 1}/2)...`);
 
-    for (let i = 0; i < allButtons.length; i++) {
-      try {
-        const btn = allButtons[i];
-        const text = await btn.innerText().catch(() => '');
-        if (text.trim() !== '画像') continue;
-        if (!await btn.isVisible().catch(() => false)) continue;
+      // 2回目の試行では新しい空行を確保
+      if (attempt === 1) {
+        await editor.click({ force: true });
+        await page.waitForTimeout(300);
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(300);
+      }
 
-        logger.info(`「画像」ボタンを発見 (index=${i})。クリックします...`);
+      // "/" を入力してスラッシュコマンドメニューを開く
+      await page.keyboard.type('/');
+      await page.waitForTimeout(1000);
 
-        // ファイルチューザーを待ちながらクリック
+      // メニューが開いたか確認: 表示中の「画像」ボタンを探す
+      const imgMenuBtn = page.locator('button:has-text("画像"):visible').first();
+      const menuOpened = await imgMenuBtn.isVisible({ timeout: 2000 }).catch(() => false);
+
+      if (menuOpened) {
+        logger.info('スラッシュコマンドで挿入メニューを開きました');
+
         try {
           const [fileChooser] = await Promise.all([
             page.waitForEvent('filechooser', { timeout: 10000 }),
-            btn.click({ force: true }),
+            imgMenuBtn.click(),
           ]);
           await fileChooser.setFiles(imagePath);
           uploaded = true;
-          logger.info('ファイルチューザー経由でアップロード成功');
+          logger.info('「挿入」→「画像」→ファイルチューザーでアップロード成功');
         } catch (fcErr) {
-          logger.info(`ファイルチューザー未発生: ${fcErr.message.slice(0, 60)}`);
-          // ファイルチューザーが開かなかった場合、file inputを探す
-          await page.waitForTimeout(1500);
-          const fiCount = await page.locator('input[type="file"]').count();
-          logger.info(`クリック後のfile input数: ${fiCount}`);
+          logger.info(`スラッシュコマンドクリック失敗: ${fcErr.message.slice(0, 80)}`);
+          // メニューが開いたがfileChooserが来なかった場合: file inputを探す
+          await page.waitForTimeout(1000);
+          const fiCount = await page.locator('input[type="file"]').count().catch(() => 0);
           if (fiCount > 0) {
-            const fi = page.locator('input[type="file"]').last();
-            await fi.setInputFiles(imagePath);
-            uploaded = true;
-            logger.info('file input経由でアップロード成功');
+            try {
+              await page.locator('input[type="file"]').last().setInputFiles(imagePath);
+              uploaded = true;
+              logger.info('スラッシュコマンド→file input経由でアップロード成功');
+            } catch {}
           }
         }
-        break; // 「画像」ボタンは1つだけ処理
-      } catch (btnErr) {
-        logger.info(`ボタン[${i}]処理エラー: ${btnErr.message.slice(0, 60)}`);
+      } else {
+        // メニューが開かなかった → "/" を削除
+        logger.info('スラッシュコマンドメニューが開きませんでした。"/"を削除');
+        await page.keyboard.press('Backspace');
+        await page.waitForTimeout(300);
       }
     }
 
-    // === Step 3: 結果確認 ===
+    // 方法B: サイドバーのトグルボタン→「画像」クリック（フォールバック）
+    if (!uploaded) {
+      logger.info('方法B: サイドバーメニューから画像挿入を試みます...');
+
+      // サイドバーの挿入メニューを開く: トグルボタン（class に sc-6fa32351 含む空テキストボタン）をクリック
+      const toggleBtn = page.locator('button[class*="sc-6fa32351"]').first();
+      if (await toggleBtn.count().catch(() => 0) > 0) {
+        await toggleBtn.click({ force: true });
+        await page.waitForTimeout(1000);
+        logger.info('サイドバートグルボタンをクリック');
+      }
+
+      // 「画像」ボタンを探してクリック
+      const sidebarImgBtn = page.locator('button:has-text("画像"):visible').first();
+      if (await sidebarImgBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        try {
+          const [fileChooser] = await Promise.all([
+            page.waitForEvent('filechooser', { timeout: 10000 }),
+            sidebarImgBtn.click({ force: true }),
+          ]);
+          await fileChooser.setFiles(imagePath);
+          uploaded = true;
+          logger.info('サイドバー→画像→ファイルチューザーでアップロード成功');
+        } catch (e) {
+          logger.info(`サイドバーメソッド失敗: ${e.message.slice(0, 80)}`);
+        }
+      }
+    }
+
+    // 方法C: DOM操作でfile inputを作成してアップロード（最終フォールバック）
+    if (!uploaded) {
+      logger.info('方法C: DOM操作でfile inputを作成してアップロードを試みます...');
+
+      // エディタ内にfile inputが既にあるか確認
+      const existingFi = await page.locator('input[type="file"]').count().catch(() => 0);
+      if (existingFi > 0) {
+        try {
+          await page.locator('input[type="file"]').last().setInputFiles(imagePath);
+          uploaded = true;
+          logger.info('既存file input経由でアップロード成功');
+        } catch {}
+      }
+
+      // file inputがない場合: 全ボタンからforce:trueで「画像」をクリック
+      if (!uploaded) {
+        const allBtns = await page.locator('button').all();
+        for (const btn of allBtns) {
+          const text = await btn.innerText().catch(() => '');
+          if (text.trim() === '画像') {
+            logger.info('全ボタン走査で「画像」発見。force:trueでクリック...');
+            try {
+              const [fileChooser] = await Promise.all([
+                page.waitForEvent('filechooser', { timeout: 8000 }),
+                btn.click({ force: true }),
+              ]);
+              await fileChooser.setFiles(imagePath);
+              uploaded = true;
+              logger.info('全ボタン走査→ファイルチューザーでアップロード成功');
+            } catch {}
+            if (uploaded) break;
+          }
+        }
+      }
+    }
+
+    // === Step 4: 結果確認 ===
     if (uploaded) {
       await page.waitForTimeout(3000);
 
@@ -753,7 +848,7 @@ async function insertDiagramImage(page, imagePath, h2Text) {
     }
 
     // 失敗時ログ
-    logger.warn(`図解画像アップロード失敗: 「画像」ボタンのクリックまたはファイル選択に失敗`);
+    logger.warn(`図解画像アップロード失敗: 全メソッド（スラッシュコマンド, サイドバー, DOM操作）で失敗`);
     try {
       await page.screenshot({ path: resolve(config.paths.logs, 'diagram-insert-failed.png'), fullPage: true });
     } catch { /* ignore */ }
