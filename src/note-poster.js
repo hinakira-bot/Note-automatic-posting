@@ -685,98 +685,137 @@ async function insertDiagramImage(page, imagePath, h2Text) {
     // --- Step 2: 画像アップロード ---
     let uploaded = false;
 
-    // 方法A: note.comの「+」ボタン（空行の左側に表示されるフローティングメニュー）
-    // note.comではProseMirrorの空行にフォーカスすると左側に「+」が出る
-    const plusButtonSelectors = [
-      '[class*="FloatingMenu"] button',
-      '[class*="floatingMenu"] button',
-      '[class*="menu-button"]',
-      '[class*="MenuButton"]',
-      '[class*="add-block"]',
-      'button[class*="plus"]',
-      '[class*="SlashMenu"]',
-      // note.com固有: 段落左の追加ボタン
-      '.ProseMirror + [class*="menu"] button',
-      '[class*="block-menu"] button:first-child',
-    ];
-
-    for (const sel of plusButtonSelectors) {
+    // 方法A（最優先）: note.comの「画像」ボタンを直接検索
+    // ログから判明: text="画像", class="sc-6fa32351-4 eYVdgL"（styled-components）
+    // 親要素の制約なしでテキスト内容のみで検索する
+    if (!uploaded) {
       try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await btn.click();
-          await page.waitForTimeout(800);
+        // 完全一致で「画像」テキストのボタンを検索
+        const imgBtn = page.locator('button').filter({ hasText: /^画像$/ }).first();
+        if (await imgBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+          logger.info('「画像」ボタンを検出。クリックしてファイルチューザーを待機...');
 
-          // 画像オプションを選択
-          const imgOptionSelectors = [
-            'button:has-text("画像")',
-            '[data-type="image"]',
-            '[class*="image"] button',
-            'button[aria-label*="画像"]',
-            'li:has-text("画像")',
-            '[role="menuitem"]:has-text("画像")',
-          ];
+          try {
+            const [fileChooser] = await Promise.all([
+              page.waitForEvent('filechooser', { timeout: 10000 }),
+              imgBtn.click({ force: true }),
+            ]);
+            await fileChooser.setFiles(imagePath);
+            uploaded = true;
+            logger.info('「画像」ボタン→ファイルチューザー経由でアップロード成功');
+          } catch (fcErr) {
+            // ファイルチューザーが直接開かなかった場合
+            logger.info(`ファイルチューザー未検出 (${fcErr.message.slice(0, 60)})。サブダイアログを確認...`);
 
-          for (const imgSel of imgOptionSelectors) {
-            try {
-              const imgBtn = page.locator(imgSel).first();
-              if (await imgBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-                const [fileChooser] = await Promise.all([
-                  page.waitForEvent('filechooser', { timeout: 10000 }),
-                  imgBtn.click(),
-                ]);
-                await fileChooser.setFiles(imagePath);
-                uploaded = true;
-                logger.info(`「+」メニュー経由で画像をアップロード (${sel} → ${imgSel})`);
-                break;
-              }
-            } catch {}
+            // ボタンクリック後にサブダイアログやファイルインプットが出現した可能性
+            await page.waitForTimeout(1000);
+
+            // サブダイアログ内のアップロード系ボタン/入力を検索
+            const subDialogSelectors = [
+              'input[type="file"][accept*="image"]',
+              'input[type="file"]',
+              'button:has-text("アップロード")',
+              'button:has-text("ファイルを選択")',
+              'button:has-text("画像を選択")',
+              'button:has-text("コンピューターからアップロード")',
+              '[class*="upload"] button',
+              '[class*="dropzone"]',
+            ];
+
+            for (const subSel of subDialogSelectors) {
+              try {
+                const subEl = page.locator(subSel).first();
+                if (subSel.startsWith('input[type="file"]')) {
+                  // file inputは非表示でもsetInputFilesで使える
+                  if (await subEl.count() > 0) {
+                    await subEl.setInputFiles(imagePath);
+                    uploaded = true;
+                    logger.info(`サブダイアログのファイルインプット経由でアップロード (${subSel})`);
+                    break;
+                  }
+                } else if (await subEl.isVisible({ timeout: 1500 }).catch(() => false)) {
+                  const [fileChooser2] = await Promise.all([
+                    page.waitForEvent('filechooser', { timeout: 8000 }),
+                    subEl.click({ force: true }),
+                  ]);
+                  await fileChooser2.setFiles(imagePath);
+                  uploaded = true;
+                  logger.info(`サブダイアログ経由でアップロード (${subSel})`);
+                  break;
+                }
+              } catch {}
+            }
           }
-          if (uploaded) break;
-
-          // メニューが開いたが画像オプションが見つからない → 閉じる
-          await page.keyboard.press('Escape');
-          await page.waitForTimeout(300);
         }
       } catch {}
     }
 
-    // 方法B: エディタ上部などにある画像ボタン（ツールバー）
+    // 方法B: has-textの部分一致でボタンを探す（方法Aが失敗した場合）
     if (!uploaded) {
-      const toolbarImageSelectors = [
+      const btnSelectors = [
+        'button:has-text("画像")',
         'button[aria-label*="画像"]',
         'button[title*="画像"]',
-        '[data-testid="image-button"]',
-        '[class*="image-tool"]',
-        '[class*="ImageTool"]',
-        '[class*="toolbar"] button:has-text("画像")',
+        '[role="menuitem"]:has-text("画像")',
+        'li:has-text("画像")',
       ];
 
-      for (const sel of toolbarImageSelectors) {
+      for (const sel of btnSelectors) {
         try {
           const btn = page.locator(sel).first();
           if (await btn.isVisible({ timeout: 1500 }).catch(() => false)) {
+            logger.info(`方法Bで画像ボタン検出: ${sel}`);
             const [fileChooser] = await Promise.all([
-              page.waitForEvent('filechooser', { timeout: 10000 }),
-              btn.click(),
+              page.waitForEvent('filechooser', { timeout: 8000 }),
+              btn.click({ force: true }),
             ]);
             await fileChooser.setFiles(imagePath);
             uploaded = true;
-            logger.info(`ツールバー経由で画像をアップロード (${sel})`);
+            logger.info(`方法B経由でアップロード成功 (${sel})`);
             break;
           }
         } catch {}
       }
     }
 
-    // 方法C: ページ上の非表示fileInputを直接使用
+    // 方法C: ページ上のfileInputを直接使用（表示/非表示問わず）
     if (!uploaded) {
       try {
-        const fileInput = page.locator('input[type="file"][accept*="image"]').first();
-        if (await fileInput.count() > 0) {
-          await fileInput.setInputFiles(imagePath);
-          uploaded = true;
-          logger.info('隠しファイルインプット経由で画像をアップロード');
+        const fileInputs = page.locator('input[type="file"]');
+        const count = await fileInputs.count();
+        logger.info(`ページ上のfile input数: ${count}`);
+        for (let i = 0; i < count; i++) {
+          try {
+            const fi = fileInputs.nth(i);
+            const accept = await fi.getAttribute('accept').catch(() => '');
+            logger.info(`file input[${i}]: accept="${accept}"`);
+            if (!accept || accept.includes('image')) {
+              await fi.setInputFiles(imagePath);
+              uploaded = true;
+              logger.info(`file input[${i}]経由でアップロード成功`);
+              break;
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    // 方法D: 「画像」ボタンクリック後、fileChooser待機なしで
+    // ボタンが画像ブロックを作成し、その中のfile inputが出現するパターン
+    if (!uploaded) {
+      try {
+        const imgBtn = page.locator('button').filter({ hasText: /画像/ }).first();
+        if (await imgBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+          await imgBtn.click({ force: true });
+          await page.waitForTimeout(2000);
+
+          // クリック後に出現したfile inputを探す
+          const newFileInput = page.locator('input[type="file"]').last();
+          if (await newFileInput.count() > 0) {
+            await newFileInput.setInputFiles(imagePath);
+            uploaded = true;
+            logger.info('方法D: ボタンクリック後のfile inputでアップロード成功');
+          }
         }
       } catch {}
     }
@@ -788,17 +827,45 @@ async function insertDiagramImage(page, imagePath, h2Text) {
       return true;
     }
 
-    // アップロードできなかった場合、デバッグ情報を出力
+    // アップロードできなかった場合、詳細なデバッグ情報を出力
     const debugInfo = await page.evaluate(() => {
+      const result = { buttons: [], fileInputs: [], interestingElements: [] };
+
+      // ボタン情報
       const buttons = Array.from(document.querySelectorAll('button'));
-      return buttons
+      result.buttons = buttons
         .filter(b => b.offsetParent !== null)
-        .map(b => ({ text: b.textContent.trim().slice(0, 30), class: b.className.slice(0, 60) }))
+        .map(b => ({
+          text: b.textContent.trim().slice(0, 40),
+          class: b.className.slice(0, 80),
+          parent: b.parentElement?.className?.slice(0, 50) || '',
+        }))
         .filter(b => b.text.includes('画像') || b.text.includes('+') || b.text.includes('追加') ||
+                     b.text.includes('挿入') || b.text.includes('アップロード') ||
                      b.class.includes('menu') || b.class.includes('Menu') || b.class.includes('image'))
-        .slice(0, 10);
-    }).catch(() => []);
-    logger.warn(`図解画像アップロード失敗。関連ボタン: ${JSON.stringify(debugInfo)}`);
+        .slice(0, 15);
+
+      // file input情報
+      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+      result.fileInputs = fileInputs.map(fi => ({
+        accept: fi.accept,
+        visible: fi.offsetParent !== null,
+        id: fi.id,
+        name: fi.name,
+        class: fi.className.slice(0, 50),
+      }));
+
+      // エディタ左サイドバーの要素
+      const sidebarEls = document.querySelectorAll('[class*="sidebar"], [class*="Sidebar"], [class*="tool"], [class*="Tool"]');
+      result.interestingElements = Array.from(sidebarEls).slice(0, 5).map(el => ({
+        tag: el.tagName,
+        class: el.className.slice(0, 80),
+        childButtons: Array.from(el.querySelectorAll('button')).map(b => b.textContent.trim().slice(0, 20)).slice(0, 5),
+      }));
+
+      return result;
+    }).catch(() => ({}));
+    logger.warn(`図解画像アップロード失敗。デバッグ情報: ${JSON.stringify(debugInfo, null, 0)}`);
 
     // スクリーンショット保存
     try {
