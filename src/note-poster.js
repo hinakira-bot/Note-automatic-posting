@@ -678,20 +678,53 @@ async function insertDiagramImage(page, imagePath, h2Text) {
       await page.waitForTimeout(500);
       logger.info('プレースホルダーテキストを削除しました');
     } else if (cursorResult.type === 'h2_found') {
-      // Playwrightのlocatorでh2要素を直接クリック（ProseMirrorの状態が正しく更新される）
-      const h2El = page.locator('.ProseMirror h2').nth(cursorResult.index);
-      const h2Visible = await h2El.isVisible({ timeout: 3000 }).catch(() => false);
-      if (h2Visible) {
-        await h2El.click({ force: true });
-        await page.waitForTimeout(300);
-        // End: h2テキストの末尾へ → Enter: h2の直下に新しい空の段落を作成
+      // ProseMirrorはforce:trueクリックでは内部状態が更新されないことがある
+      // → scrollIntoView + 実座標クリック + ArrowDown方式に変更
+
+      // まずh2をビューポート中央にスクロールし、座標を取得
+      const h2Rect = await page.evaluate((idx) => {
+        const editor = document.querySelector('.ProseMirror') ||
+                       document.querySelector('div[contenteditable="true"][role="textbox"]');
+        if (!editor) return null;
+        const headings = editor.querySelectorAll('h2');
+        const h2 = headings[idx];
+        if (!h2) return null;
+        h2.scrollIntoView({ block: 'center', behavior: 'instant' });
+        const rect = h2.getBoundingClientRect();
+        return {
+          // h2テキストの末尾付近（右端から少し内側）をクリック
+          x: Math.min(rect.right - 10, rect.left + rect.width * 0.9),
+          y: rect.top + rect.height / 2,
+          width: rect.width,
+          height: rect.height,
+        };
+      }, cursorResult.index);
+
+      await page.waitForTimeout(500);
+
+      if (h2Rect && h2Rect.width > 0) {
+        // 実座標でマウスクリック（ProseMirrorのイベントハンドラが正しく起動する）
+        await page.mouse.click(h2Rect.x, h2Rect.y);
+        await page.waitForTimeout(400);
+
+        // Endキーでh2テキスト末尾に移動
         await page.keyboard.press('End');
-        await page.waitForTimeout(200);
-        await page.keyboard.press('Enter');
         await page.waitForTimeout(300);
-        logger.info(`h2[${cursorResult.index}]「${cursorResult.text}」の直下にカーソルを配置しました`);
+
+        // Enterでh2の直下に新しい空パラグラフを作成
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(500);
+
+        // 検証: カーソルがh2内ではなくパラグラフにいることを確認
+        const cursorCheck = await page.evaluate(() => {
+          const sel = window.getSelection();
+          if (!sel || !sel.anchorNode) return 'no_selection';
+          const node = sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentElement : sel.anchorNode;
+          return node ? node.tagName : 'unknown';
+        }).catch(() => 'error');
+        logger.info(`h2[${cursorResult.index}]「${cursorResult.text}」の直下にカーソル配置 (現在のノード: ${cursorCheck})`);
       } else {
-        logger.warn(`h2[${cursorResult.index}]が表示されていません。エディタ末尾に挿入します`);
+        logger.warn(`h2[${cursorResult.index}]のBoundingRect取得失敗。エディタ末尾に挿入します`);
         await editor.click({ force: true });
         await page.keyboard.press('Control+End');
         await page.keyboard.press('Enter');
