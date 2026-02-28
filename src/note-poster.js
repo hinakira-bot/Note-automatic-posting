@@ -608,53 +608,13 @@ async function insertBodyContent(page, bodyHtml) {
 }
 
 /**
- * note.com エディタで「挿入」メニューを開く
- * 左サイドバーの「＋ 追加」→「挿入」ポップアップメニュー
- * @returns {boolean} メニューが開いたかどうか
- */
-async function openInsertMenu(page) {
-  // 方法1: 左サイドバーの「＋ 追加」ボタンをクリック
-  const addButtonSelectors = [
-    'button:has-text("追加")',
-    'button:has-text("＋")',
-    'button:has-text("+")',
-  ];
-
-  for (const sel of addButtonSelectors) {
-    try {
-      const btn = page.locator(sel).first();
-      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await btn.click({ force: true });
-        await page.waitForTimeout(800);
-        logger.info(`「挿入」メニューを開きました (${sel})`);
-        return true;
-      }
-    } catch {}
-  }
-
-  // 方法2: スラッシュコマンド「/」で挿入メニューを呼び出す
-  try {
-    await page.keyboard.press('/');
-    await page.waitForTimeout(800);
-    // メニューが出現したか確認
-    const menuVisible = await page.locator('button:has-text("画像"), [role="menuitem"]:has-text("画像")')
-      .first().isVisible({ timeout: 2000 }).catch(() => false);
-    if (menuVisible) {
-      logger.info('スラッシュコマンドで挿入メニューを開きました');
-      return true;
-    }
-    // メニューが出なかった場合、入力した「/」を消す
-    await page.keyboard.press('Backspace');
-  } catch {}
-
-  return false;
-}
-
-/**
- * 本文中に図解画像を挿入（note.comの「挿入」メニュー経由）
+ * 本文中に図解画像を挿入
  *
- * note.com UIフロー（スクリーンショットで確認済み）:
- *   左サイドバー「＋ 追加」→「挿入」ポップアップ →「画像」→ ファイルチューザー
+ * ログ分析で判明した事実:
+ *   - note.comの「挿入」メニューはエディタ読み込み時に自動表示される
+ *   - メニュー内の「画像」ボタン: class="sc-6fa32351-4 eYVdgL", text="画像"
+ *   - 「追加」ボタンはDOMに存在しない（メニューは自動表示済み）
+ *   - fileInputsは「画像」クリック後に動的生成される
  *
  * @param {import('playwright').Page} page
  * @param {string} imagePath - 画像ファイルのパス
@@ -666,13 +626,13 @@ async function insertDiagramImage(page, imagePath, h2Text) {
   try {
     logger.info(`図解画像を挿入中: ${imagePath} (h2: ${h2Text || 'N/A'})`);
 
-    // === Step 1: プレースホルダーテキストを探してカーソルを配置 ===
+    // === Step 1: カーソルを挿入位置に配置 ===
     const placeholderFound = await page.evaluate((targetH2) => {
       const editor = document.querySelector('.ProseMirror') ||
                      document.querySelector('div[contenteditable="true"][role="textbox"]');
       if (!editor) return false;
 
-      // プレースホルダーパターンに一致する段落を探す（最初の1つだけ処理）
+      // プレースホルダーテキストを探す
       const paragraphs = editor.querySelectorAll('p, .paragraph');
       for (const p of paragraphs) {
         const text = p.textContent.trim();
@@ -688,7 +648,7 @@ async function insertDiagramImage(page, imagePath, h2Text) {
         }
       }
 
-      // プレースホルダーがない場合: 対応するh2の直後にカーソルを配置
+      // h2の直後にカーソルを配置
       if (targetH2) {
         const headings = editor.querySelectorAll('h2, .heading');
         for (const h of headings) {
@@ -724,113 +684,76 @@ async function insertDiagramImage(page, imagePath, h2Text) {
       logger.warn('図解画像の挿入位置が見つかりません');
     }
 
-    // === Step 2: 「挿入」メニュー → 「画像」で画像をアップロード ===
+    // === Step 2: 「画像」ボタンを直接クリック ===
+    // ログ分析: 挿入メニューは自動表示済み、「画像」ボタンは常にDOMに存在
     let uploaded = false;
 
-    // --- 方法A: 「＋ 追加」→「挿入」メニュー →「画像」→ ファイルチューザー ---
-    if (!uploaded) {
-      const menuOpened = await openInsertMenu(page);
-      if (menuOpened) {
-        // 「挿入」ポップアップ内の「画像」をクリック
-        // ポップアップにはアイコン+テキストの項目が並ぶ
-        const imgMenuSelectors = [
-          'button:has-text("画像")',
-          '[role="menuitem"]:has-text("画像")',
-          'li:has-text("画像")',
-          'div:has-text("画像")',
-        ];
+    // 全buttonを走査し、innerTextが「画像」完全一致のものをクリック
+    const allButtons = await page.locator('button').all();
+    logger.info(`ページ上のボタン総数: ${allButtons.length}`);
 
-        for (const sel of imgMenuSelectors) {
-          try {
-            // 「画像」テキストを含む要素を検索（「見出し画像」等は除外）
-            const candidates = page.locator(sel);
-            const count = await candidates.count();
-            for (let i = 0; i < count; i++) {
-              const el = candidates.nth(i);
-              const text = await el.innerText().catch(() => '');
-              // 「画像」単体のメニュー項目を特定（「見出し画像」等を除外）
-              if (text.trim() === '画像' && await el.isVisible().catch(() => false)) {
-                logger.info(`「挿入」メニュー内「画像」を検出 (${sel}[${i}])`);
-                try {
-                  const [fileChooser] = await Promise.all([
-                    page.waitForEvent('filechooser', { timeout: 10000 }),
-                    el.click({ force: true }),
-                  ]);
-                  await fileChooser.setFiles(imagePath);
-                  uploaded = true;
-                  logger.info('「挿入」→「画像」→ファイルチューザーでアップロード成功');
-                } catch (fcErr) {
-                  logger.info(`ファイルチューザー未検出: ${fcErr.message.slice(0, 80)}`);
-                  // ファイルチューザーが開かなかった → file input検索
-                  await page.waitForTimeout(1000);
-                  try {
-                    const fi = page.locator('input[type="file"]').last();
-                    if (await fi.count() > 0) {
-                      await fi.setInputFiles(imagePath);
-                      uploaded = true;
-                      logger.info('「画像」クリック後のfile inputでアップロード成功');
-                    }
-                  } catch {}
-                }
-                break;
-              }
-            }
-            if (uploaded) break;
-          } catch {}
-        }
-
-        // メニューが開いたが画像挿入できなかった → メニューを閉じる
-        if (!menuOpened || !uploaded) {
-          await page.keyboard.press('Escape');
-          await page.waitForTimeout(300);
-        }
-      }
-    }
-
-    // --- 方法B: ページ上のfile inputを直接使用（フォールバック） ---
-    if (!uploaded) {
+    for (let i = 0; i < allButtons.length; i++) {
       try {
-        const fileInputs = page.locator('input[type="file"]');
-        const count = await fileInputs.count();
-        if (count > 0) {
-          logger.info(`ページ上のfile input数: ${count}。直接アップロードを試行...`);
-          for (let i = 0; i < count; i++) {
-            try {
-              const fi = fileInputs.nth(i);
-              const accept = await fi.getAttribute('accept').catch(() => '');
-              if (!accept || accept.includes('image')) {
-                await fi.setInputFiles(imagePath);
-                uploaded = true;
-                logger.info(`file input[${i}] (accept="${accept}") でアップロード成功`);
-                break;
-              }
-            } catch {}
+        const btn = allButtons[i];
+        const text = await btn.innerText().catch(() => '');
+        if (text.trim() !== '画像') continue;
+        if (!await btn.isVisible().catch(() => false)) continue;
+
+        logger.info(`「画像」ボタンを発見 (index=${i})。クリックします...`);
+
+        // ファイルチューザーを待ちながらクリック
+        try {
+          const [fileChooser] = await Promise.all([
+            page.waitForEvent('filechooser', { timeout: 10000 }),
+            btn.click({ force: true }),
+          ]);
+          await fileChooser.setFiles(imagePath);
+          uploaded = true;
+          logger.info('ファイルチューザー経由でアップロード成功');
+        } catch (fcErr) {
+          logger.info(`ファイルチューザー未発生: ${fcErr.message.slice(0, 60)}`);
+          // ファイルチューザーが開かなかった場合、file inputを探す
+          await page.waitForTimeout(1500);
+          const fiCount = await page.locator('input[type="file"]').count();
+          logger.info(`クリック後のfile input数: ${fiCount}`);
+          if (fiCount > 0) {
+            const fi = page.locator('input[type="file"]').last();
+            await fi.setInputFiles(imagePath);
+            uploaded = true;
+            logger.info('file input経由でアップロード成功');
           }
         }
-      } catch {}
+        break; // 「画像」ボタンは1つだけ処理
+      } catch (btnErr) {
+        logger.info(`ボタン[${i}]処理エラー: ${btnErr.message.slice(0, 60)}`);
+      }
     }
 
     // === Step 3: 結果確認 ===
     if (uploaded) {
       await page.waitForTimeout(3000);
+
+      // トリミングダイアログが出た場合は閉じる
+      const hasCropper = await page.locator('.reactEasyCrop_CropArea, .ReactModalPortal .reactEasyCrop_Container').first()
+        .isVisible({ timeout: 2000 }).catch(() => false);
+      if (hasCropper) {
+        logger.info('図解画像のトリミングダイアログを検出。保存します...');
+        const saveBtn = page.locator('.ReactModalPortal button:has-text("保存")').first();
+        if (await saveBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await saveBtn.click({ force: true });
+          await page.waitForTimeout(2000);
+        } else {
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(1000);
+        }
+      }
+
       logger.info(`図解画像を挿入しました: ${imagePath}`);
       return true;
     }
 
-    // アップロードできなかった場合、デバッグ情報を出力
-    const debugInfo = await page.evaluate(() => {
-      const result = { allButtons: [], fileInputs: [] };
-      const buttons = Array.from(document.querySelectorAll('button'));
-      result.allButtons = buttons
-        .filter(b => b.offsetParent !== null)
-        .map(b => ({ text: b.textContent.trim().slice(0, 40), class: b.className.slice(0, 60) }))
-        .slice(0, 25);
-      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-      result.fileInputs = fileInputs.map(fi => ({ accept: fi.accept, visible: fi.offsetParent !== null }));
-      return result;
-    }).catch(() => ({}));
-    logger.warn(`図解画像アップロード失敗。デバッグ: ${JSON.stringify(debugInfo, null, 0)}`);
-
+    // 失敗時ログ
+    logger.warn(`図解画像アップロード失敗: 「画像」ボタンのクリックまたはファイル選択に失敗`);
     try {
       await page.screenshot({ path: resolve(config.paths.logs, 'diagram-insert-failed.png'), fullPage: true });
     } catch { /* ignore */ }
