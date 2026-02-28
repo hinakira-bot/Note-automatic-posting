@@ -262,6 +262,8 @@ async function uploadCoverImage(page, imagePath) {
 
     // カバー画像エリアをクリック（「見出し画像」エリア）
     const coverSelectors = [
+      'button[aria-label="画像を追加"]',
+      'button:has-text("画像をアップロード")',
       '[data-testid="header-image"]',
       '.p-editor__header-image',
       'button:has-text("見出し画像")',
@@ -353,8 +355,9 @@ async function insertBodyContent(page, bodyHtml) {
 
     // 方法1: クリップボード経由でペースト（最も確実）
     const editorSelectors = [
-      '[contenteditable="true"]',
+      'div[contenteditable="true"][role="textbox"]',
       '.ProseMirror',
+      'div[contenteditable="true"]',
       '[role="textbox"]',
       '.p-editor__body',
       '[class*="editor"] [contenteditable]',
@@ -383,8 +386,9 @@ async function insertBodyContent(page, bodyHtml) {
 
     // クリップボードにHTMLをセットしてペースト
     const pasted = await page.evaluate(async (html) => {
-      const editor = document.querySelector('[contenteditable="true"]') ||
+      const editor = document.querySelector('div[contenteditable="true"][role="textbox"]') ||
                      document.querySelector('.ProseMirror') ||
+                     document.querySelector('div[contenteditable="true"]') ||
                      document.querySelector('[role="textbox"]');
       if (!editor) return false;
 
@@ -414,8 +418,9 @@ async function insertBodyContent(page, bodyHtml) {
     // 方法2: innerHTML直接設定（フォールバック）
     logger.info('ペースト失敗、innerHTML直接設定を試行...');
     await page.evaluate((html) => {
-      const editor = document.querySelector('[contenteditable="true"]') ||
+      const editor = document.querySelector('div[contenteditable="true"][role="textbox"]') ||
                      document.querySelector('.ProseMirror') ||
+                     document.querySelector('div[contenteditable="true"]') ||
                      document.querySelector('[role="textbox"]');
       if (editor) {
         editor.innerHTML = html;
@@ -428,8 +433,9 @@ async function insertBodyContent(page, bodyHtml) {
 
     // 入力確認
     const contentLength = await page.evaluate(() => {
-      const editor = document.querySelector('[contenteditable="true"]') ||
+      const editor = document.querySelector('div[contenteditable="true"][role="textbox"]') ||
                      document.querySelector('.ProseMirror') ||
+                     document.querySelector('div[contenteditable="true"]') ||
                      document.querySelector('[role="textbox"]');
       return editor ? editor.innerText.length : 0;
     });
@@ -588,17 +594,33 @@ export async function postToNote(article, imageFiles) {
     await login(context);
 
     const page = await context.newPage();
-    await page.goto(EDITOR_URL, { waitUntil: 'networkidle', timeout: 60000 });
+    logger.info(`エディタページへ遷移中: ${EDITOR_URL}`);
+    await page.goto(EDITOR_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(3000);
 
-    // エディタの読み込みを待つ
+    // ログインにリダイレクトされた場合の検出
+    const editorPageUrl = page.url();
+    logger.info(`エディタページURL: ${editorPageUrl}`);
+    if (editorPageUrl.includes('/login')) {
+      logger.warn('ログインページにリダイレクトされました。セッションが無効です。');
+      throw new Error('ログインセッションが無効です。設定ページの「対話型セッション」からログインしてください。');
+    }
+
+    // エディタの読み込みを待つ（タイトル入力欄で判定）
     const editorLoaded = await page.waitForSelector(
-      '[contenteditable="true"], .ProseMirror, [role="textbox"]',
-      { timeout: 15000 }
+      'textarea[placeholder*="タイトル"], div[contenteditable="true"][role="textbox"], .ProseMirror, [contenteditable="true"]',
+      { timeout: 30000 }
     ).catch(() => null);
 
     if (!editorLoaded) {
-      throw new Error('エディタの読み込みに失敗しました');
+      // デバッグ用スクリーンショット
+      try {
+        await page.screenshot({ path: resolve(config.paths.logs, 'editor-failed.png'), fullPage: true });
+        logger.info('エディタ読み込み失敗時のスクリーンショットを保存: logs/editor-failed.png');
+      } catch { /* ignore */ }
+      logger.error(`現在のURL: ${page.url()}`);
+      throw new Error('エディタの読み込みに失敗しました。スクリーンショットを確認してください: logs/editor-failed.png');
     }
     logger.info('エディタの読み込み完了');
 
