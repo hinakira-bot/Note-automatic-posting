@@ -609,62 +609,203 @@ async function insertBodyContent(page, bodyHtml) {
 
 /**
  * 本文中に図解画像を挿入（エディタの画像挿入機能経由）
+ * @param {import('playwright').Page} page
+ * @param {string} imagePath - 画像ファイルのパス
+ * @param {string} h2Text - 対応するh2見出しテキスト（位置特定用）
  */
-async function insertDiagramImage(page, imagePath) {
+async function insertDiagramImage(page, imagePath, h2Text) {
   if (!imagePath || !existsSync(imagePath)) return false;
 
   try {
-    // エディタ内の画像追加ボタンを探す
-    const imageButtonSelectors = [
-      'button[aria-label*="画像"]',
-      'button[title*="画像"]',
-      '[data-testid="image-button"]',
-      'button:has-text("画像")',
-      '[class*="image-tool"]',
-      '[class*="ImageTool"]',
+    logger.info(`図解画像を挿入中: ${imagePath} (h2: ${h2Text || 'N/A'})`);
+
+    // --- Step 1: プレースホルダーテキストを探してカーソルを配置 ---
+    const placeholderFound = await page.evaluate((targetH2) => {
+      const editor = document.querySelector('.ProseMirror') ||
+                     document.querySelector('div[contenteditable="true"][role="textbox"]');
+      if (!editor) return false;
+
+      // プレースホルダーパターンに一致する段落を探す
+      const paragraphs = editor.querySelectorAll('p, .paragraph');
+      for (const p of paragraphs) {
+        const text = p.textContent.trim();
+        if (text.includes('ここに図解') || text.includes('図解画像を挿入') ||
+            text.includes('画像を挿入') || text === '（ここに図解画像を挿入）') {
+          // この段落をクリックしてフォーカス
+          p.click();
+          // 全テキストを選択（後で削除するため）
+          const range = document.createRange();
+          range.selectNodeContents(p);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          return true;
+        }
+      }
+
+      // プレースホルダーがない場合: 対応するh2の直後に空行を作る
+      if (targetH2) {
+        const headings = editor.querySelectorAll('h2, .heading');
+        for (const h of headings) {
+          if (h.textContent.trim().includes(targetH2.slice(0, 15))) {
+            // h2の直後にカーソルを配置
+            const nextEl = h.nextElementSibling;
+            if (nextEl) {
+              nextEl.click();
+              const range = document.createRange();
+              range.setStart(nextEl, 0);
+              range.collapse(true);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+              return 'after_h2';
+            }
+          }
+        }
+      }
+      return false;
+    }, h2Text);
+
+    if (placeholderFound === true) {
+      // プレースホルダーテキストを削除
+      await page.keyboard.press('Backspace');
+      await page.waitForTimeout(500);
+      logger.info('プレースホルダーテキストを削除しました');
+    } else if (placeholderFound === 'after_h2') {
+      // h2直後 — 新しい行を作成
+      await page.keyboard.press('Home');
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('ArrowUp');
+      await page.waitForTimeout(300);
+      logger.info('h2直後にカーソルを配置しました');
+    } else {
+      logger.warn('図解画像の挿入位置が見つかりません');
+    }
+
+    // --- Step 2: 画像アップロード ---
+    let uploaded = false;
+
+    // 方法A: note.comの「+」ボタン（空行の左側に表示されるフローティングメニュー）
+    // note.comではProseMirrorの空行にフォーカスすると左側に「+」が出る
+    const plusButtonSelectors = [
+      '[class*="FloatingMenu"] button',
+      '[class*="floatingMenu"] button',
+      '[class*="menu-button"]',
+      '[class*="MenuButton"]',
+      '[class*="add-block"]',
+      'button[class*="plus"]',
+      '[class*="SlashMenu"]',
+      // note.com固有: 段落左の追加ボタン
+      '.ProseMirror + [class*="menu"] button',
+      '[class*="block-menu"] button:first-child',
     ];
 
-    let uploaded = false;
-    for (const sel of imageButtonSelectors) {
+    for (const sel of plusButtonSelectors) {
       try {
         const btn = page.locator(sel).first();
         if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          const [fileChooser] = await Promise.all([
-            page.waitForEvent('filechooser', { timeout: 10000 }),
-            btn.click(),
-          ]);
-          await fileChooser.setFiles(imagePath);
-          uploaded = true;
-          break;
+          await btn.click();
+          await page.waitForTimeout(800);
+
+          // 画像オプションを選択
+          const imgOptionSelectors = [
+            'button:has-text("画像")',
+            '[data-type="image"]',
+            '[class*="image"] button',
+            'button[aria-label*="画像"]',
+            'li:has-text("画像")',
+            '[role="menuitem"]:has-text("画像")',
+          ];
+
+          for (const imgSel of imgOptionSelectors) {
+            try {
+              const imgBtn = page.locator(imgSel).first();
+              if (await imgBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
+                const [fileChooser] = await Promise.all([
+                  page.waitForEvent('filechooser', { timeout: 10000 }),
+                  imgBtn.click(),
+                ]);
+                await fileChooser.setFiles(imagePath);
+                uploaded = true;
+                logger.info(`「+」メニュー経由で画像をアップロード (${sel} → ${imgSel})`);
+                break;
+              }
+            } catch {}
+          }
+          if (uploaded) break;
+
+          // メニューが開いたが画像オプションが見つからない → 閉じる
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(300);
         }
       } catch {}
     }
 
+    // 方法B: エディタ上部などにある画像ボタン（ツールバー）
     if (!uploaded) {
-      // フォールバック: ツールバーの+ボタンからの画像挿入
-      try {
-        const plusBtn = page.locator('[class*="plus"], [class*="add"], button:has-text("+")').first();
-        if (await plusBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await plusBtn.click();
-          await page.waitForTimeout(500);
-          const imgOption = page.locator('button:has-text("画像"), [data-type="image"]').first();
-          if (await imgOption.isVisible({ timeout: 2000 }).catch(() => false)) {
+      const toolbarImageSelectors = [
+        'button[aria-label*="画像"]',
+        'button[title*="画像"]',
+        '[data-testid="image-button"]',
+        '[class*="image-tool"]',
+        '[class*="ImageTool"]',
+        '[class*="toolbar"] button:has-text("画像")',
+      ];
+
+      for (const sel of toolbarImageSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 1500 }).catch(() => false)) {
             const [fileChooser] = await Promise.all([
               page.waitForEvent('filechooser', { timeout: 10000 }),
-              imgOption.click(),
+              btn.click(),
             ]);
             await fileChooser.setFiles(imagePath);
             uploaded = true;
+            logger.info(`ツールバー経由で画像をアップロード (${sel})`);
+            break;
           }
+        } catch {}
+      }
+    }
+
+    // 方法C: ページ上の非表示fileInputを直接使用
+    if (!uploaded) {
+      try {
+        const fileInput = page.locator('input[type="file"][accept*="image"]').first();
+        if (await fileInput.count() > 0) {
+          await fileInput.setInputFiles(imagePath);
+          uploaded = true;
+          logger.info('隠しファイルインプット経由で画像をアップロード');
         }
       } catch {}
     }
 
+    // --- Step 3: 結果確認 ---
     if (uploaded) {
       await page.waitForTimeout(3000);
       logger.info(`図解画像を挿入しました: ${imagePath}`);
+      return true;
     }
-    return uploaded;
+
+    // アップロードできなかった場合、デバッグ情報を出力
+    const debugInfo = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      return buttons
+        .filter(b => b.offsetParent !== null)
+        .map(b => ({ text: b.textContent.trim().slice(0, 30), class: b.className.slice(0, 60) }))
+        .filter(b => b.text.includes('画像') || b.text.includes('+') || b.text.includes('追加') ||
+                     b.class.includes('menu') || b.class.includes('Menu') || b.class.includes('image'))
+        .slice(0, 10);
+    }).catch(() => []);
+    logger.warn(`図解画像アップロード失敗。関連ボタン: ${JSON.stringify(debugInfo)}`);
+
+    // スクリーンショット保存
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'diagram-insert-failed.png'), fullPage: true });
+    } catch { /* ignore */ }
+
+    return false;
   } catch (err) {
     logger.warn(`図解画像挿入エラー: ${err.message}`);
     return false;
@@ -854,7 +995,7 @@ export async function postToNote(article, imageFiles) {
     if (imageFiles.diagrams && imageFiles.diagrams.length > 0) {
       for (const diagram of imageFiles.diagrams) {
         if (diagram.imagePath) {
-          await insertDiagramImage(page, diagram.imagePath);
+          await insertDiagramImage(page, diagram.imagePath, diagram.h2 || '');
           await sleep(2000);
         }
       }
