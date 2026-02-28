@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import StatusBadge from '@/components/StatusBadge';
 import Modal from '@/components/Modal';
 
@@ -10,6 +10,8 @@ export default function KeywordsPage() {
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editItem, setEditItem] = useState(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   useEffect(() => {
     fetchKeywords();
@@ -62,6 +64,35 @@ export default function KeywordsPage() {
     }
   };
 
+  // CSVエクスポート
+  const handleExport = () => {
+    const status = filter === 'all' ? '' : `?status=${filter}`;
+    window.location.href = `/api/keywords/export${status}`;
+  };
+
+  // CSVインポート
+  const handleImport = async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('skipDuplicates', 'true');
+
+    try {
+      const res = await fetch('/api/keywords/import', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setImportResult(data);
+        fetchKeywords();
+      } else {
+        alert(data.error || 'インポートに失敗しました');
+      }
+    } catch (err) {
+      alert('インポートエラー: ' + err.message);
+    }
+  };
+
   const filtered = filter === 'all'
     ? keywords
     : keywords.filter((k) => k.status === filter);
@@ -70,12 +101,28 @@ export default function KeywordsPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">キーワード管理</h1>
-        <button
-          onClick={() => setShowAddModal(true)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-        >
-          ＋ 追加
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExport}
+            className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+            title="CSVエクスポート"
+          >
+            CSV出力
+          </button>
+          <button
+            onClick={() => setShowImportModal(true)}
+            className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+            title="CSVインポート"
+          >
+            CSV取込
+          </button>
+          <button
+            onClick={() => setShowAddModal(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+          >
+            ＋ 追加
+          </button>
+        </div>
       </div>
 
       {/* フィルター */}
@@ -174,6 +221,112 @@ export default function KeywordsPage() {
           />
         )}
       </Modal>
+
+      {/* CSVインポートモーダル */}
+      <Modal
+        isOpen={showImportModal}
+        onClose={() => { setShowImportModal(false); setImportResult(null); }}
+        title="CSVインポート"
+      >
+        <ImportForm
+          onImport={handleImport}
+          onClose={() => { setShowImportModal(false); setImportResult(null); }}
+          result={importResult}
+        />
+      </Modal>
+    </div>
+  );
+}
+
+function ImportForm({ onImport, onClose, result }) {
+  const fileRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.csv') && !file.name.endsWith('.txt')) {
+      alert('CSVファイル（.csv または .txt）を選択してください');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      await onImport(file);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {!result ? (
+        <>
+          <div className="bg-gray-50 rounded-lg p-4 text-sm text-gray-600 space-y-2">
+            <p className="font-medium text-gray-800">CSVフォーマット:</p>
+            <code className="block bg-white rounded p-2 text-xs font-mono">
+              keyword,description,category<br />
+              副業 在宅ワーク,初心者向け解説,副業<br />
+              AI 画像生成,,テクノロジー
+            </code>
+            <p className="text-xs text-gray-500 mt-2">
+              ※ ヘッダー行は自動判定されます<br />
+              ※ keyword列のみ必須（description, categoryは省略可）<br />
+              ※ 重複キーワードは自動スキップされます<br />
+              ※ Excel等で保存したCSVファイルに対応しています
+            </p>
+          </div>
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,.txt"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+
+          <div className="flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 cursor-pointer"
+            >
+              キャンセル
+            </button>
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {uploading ? '取込中...' : 'CSVファイルを選択'}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="bg-green-50 rounded-lg p-4 text-sm space-y-1">
+            <p className="font-medium text-green-800">インポート完了</p>
+            <p className="text-green-700">追加: <span className="font-bold">{result.added}件</span></p>
+            {result.skipped > 0 && (
+              <p className="text-yellow-700">スキップ（重複）: {result.skipped}件</p>
+            )}
+            {result.errors > 0 && (
+              <p className="text-red-700">エラー: {result.errors}件</p>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors cursor-pointer"
+            >
+              閉じる
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
