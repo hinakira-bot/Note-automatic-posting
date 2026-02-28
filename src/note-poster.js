@@ -327,26 +327,73 @@ async function uploadCoverImage(page, imagePath) {
 
     await page.waitForTimeout(3000);
 
-    // トリミングダイアログが表示された場合、確認ボタンを押す
-    const trimConfirmSelectors = [
-      'button:has-text("適用")',
-      'button:has-text("完了")',
-      'button:has-text("OK")',
-      'button:has-text("決定")',
-      'button:has-text("保存")',
-      '[data-testid="crop-confirm"]',
-    ];
+    // トリミングダイアログ（reactEasyCrop）の検出と処理
+    // note.com はカバー画像アップロード後にトリミングUIを表示する
+    const hasCropper = await page.locator('[data-testid="cropper"], .reactEasyCrop_CropArea, .ReactModalPortal .reactEasyCrop_Container').first()
+      .isVisible({ timeout: 5000 }).catch(() => false);
 
-    for (const sel of trimConfirmSelectors) {
-      try {
-        const btn = page.locator(sel).first();
-        if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await btn.click();
-          logger.info('トリミングダイアログを確認しました');
-          await page.waitForTimeout(2000);
-          break;
-        }
-      } catch {}
+    if (hasCropper) {
+      logger.info('トリミングダイアログを検出しました。確認ボタンを探しています...');
+
+      // デバッグ: ダイアログ内のボタンを列挙
+      const dialogButtons = await page.evaluate(() => {
+        const modal = document.querySelector('.ReactModalPortal') || document;
+        const buttons = Array.from(modal.querySelectorAll('button'));
+        return buttons
+          .filter(b => b.offsetParent !== null)
+          .map(b => ({ text: b.textContent.trim().slice(0, 50), class: b.className.slice(0, 80) }));
+      }).catch(() => []);
+      logger.info(`トリミングダイアログ内のボタン: ${JSON.stringify(dialogButtons)}`);
+
+      // 確認ボタンを押す
+      const trimConfirmSelectors = [
+        '.ReactModalPortal button:has-text("保存")',
+        '.ReactModalPortal button:has-text("適用")',
+        '.ReactModalPortal button:has-text("完了")',
+        '.ReactModalPortal button:has-text("OK")',
+        '.ReactModalPortal button:has-text("決定")',
+        'button:has-text("保存")',
+        'button:has-text("適用")',
+        'button:has-text("完了")',
+        'button:has-text("OK")',
+        '[data-testid="crop-confirm"]',
+      ];
+
+      let trimClosed = false;
+      for (const sel of trimConfirmSelectors) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await btn.click({ force: true });
+            logger.info(`トリミングダイアログを確認: ${sel}`);
+            trimClosed = true;
+            await page.waitForTimeout(2000);
+            break;
+          }
+        } catch {}
+      }
+
+      if (!trimClosed) {
+        // フォールバック: Escキーでダイアログを閉じる
+        logger.warn('トリミング確認ボタンが見つかりません。Escキーで閉じます...');
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(2000);
+      }
+
+      // ダイアログが閉じたか確認
+      const stillHasCropper = await page.locator('[data-testid="cropper"], .reactEasyCrop_CropArea').first()
+        .isVisible({ timeout: 2000 }).catch(() => false);
+      if (stillHasCropper) {
+        logger.warn('トリミングダイアログがまだ表示されています。スクリーンショットを保存...');
+        try {
+          await page.screenshot({ path: resolve(config.paths.logs, 'cropper-stuck.png'), fullPage: true });
+        } catch { /* ignore */ }
+        // 最終手段: Enterキーで確定
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(2000);
+      }
+    } else {
+      logger.info('トリミングダイアログなし。そのまま続行。');
     }
 
     logger.info('カバー画像をアップロードしました');
@@ -365,13 +412,47 @@ async function insertBodyContent(page, bodyHtml) {
   try {
     logger.info('本文を入力中...');
 
+    // トリミングダイアログが残っていないか確認（残っている場合は閉じる）
+    const hasCropperStill = await page.locator('.reactEasyCrop_CropArea, .ReactModalPortal .reactEasyCrop_Container').first()
+      .isVisible({ timeout: 2000 }).catch(() => false);
+    if (hasCropperStill) {
+      logger.warn('トリミングダイアログが残っています。閉じます...');
+      try {
+        // 「保存」「適用」「完了」「OK」ボタンを探してクリック
+        const cropBtnSelectors = [
+          '.ReactModalPortal button:has-text("保存")',
+          '.ReactModalPortal button:has-text("適用")',
+          '.ReactModalPortal button:has-text("完了")',
+          '.ReactModalPortal button:has-text("OK")',
+        ];
+        let cropClosed = false;
+        for (const sel of cropBtnSelectors) {
+          try {
+            const btn = page.locator(sel).first();
+            if (await btn.isVisible({ timeout: 1000 }).catch(() => false)) {
+              await btn.click({ force: true });
+              cropClosed = true;
+              break;
+            }
+          } catch {}
+        }
+        if (!cropClosed) {
+          await page.keyboard.press('Escape');
+        }
+        await page.waitForTimeout(2000);
+      } catch {}
+    }
+
     // note.com のHTMLをシンプルに変換（不要な属性を除去）
     const cleanHtml = bodyHtml
       .replace(/\s*id="heading-\d+"/g, '')  // heading ID属性を除去
       .replace(/\s*class="[^"]*"/g, '');     // class属性を除去
 
     // 方法1: クリップボード経由でペースト（最も確実）
+    // note.comの本文エディタセレクタ（タイトルheading要素を除外するため具体的に指定）
     const editorSelectors = [
+      '.ProseMirror.note-common-styles__textnote-body',
+      'div[contenteditable="true"][role="textbox"].ProseMirror',
       'div[contenteditable="true"][role="textbox"]',
       '.ProseMirror',
       'div[contenteditable="true"]',
@@ -397,16 +478,29 @@ async function insertBodyContent(page, bodyHtml) {
       throw new Error('エディタのcontenteditable要素が見つかりません');
     }
 
-    // エディタにフォーカス
-    await editorEl.click();
+    // エディタにフォーカス（force: trueでオーバーレイを回避）
+    await editorEl.click({ force: true });
     await page.waitForTimeout(500);
+
+    // カーソルがタイトル部分にいる可能性があるため、本文エリアの先頭段落をクリック
+    const bodyParagraph = page.locator('.ProseMirror p, .ProseMirror .paragraph, div[contenteditable="true"][role="textbox"] p').first();
+    if (await bodyParagraph.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await bodyParagraph.click({ force: true });
+      await page.waitForTimeout(300);
+      logger.info('本文エリアの段落にフォーカスしました');
+    }
+
+    // 本文エリアを全選択してクリア（既存のプレースホルダーテキスト等を除去）
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(100);
 
     // クリップボードにHTMLをセットしてペースト
     const pasted = await page.evaluate(async (html) => {
-      const editor = document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+      // 本文エディタを特定（タイトル要素を除外）
+      const editor = document.querySelector('.ProseMirror.note-common-styles__textnote-body') ||
+                     document.querySelector('div[contenteditable="true"][role="textbox"]') ||
                      document.querySelector('.ProseMirror') ||
-                     document.querySelector('div[contenteditable="true"]') ||
-                     document.querySelector('[role="textbox"]');
+                     document.querySelector('div[contenteditable="true"]');
       if (!editor) return false;
 
       editor.focus();
@@ -427,21 +521,52 @@ async function insertBodyContent(page, bodyHtml) {
     }, cleanHtml);
 
     if (pasted) {
-      logger.info('HTMLペーストで本文を挿入しました');
       await page.waitForTimeout(2000);
-      return true;
+
+      // ペースト成功したか内容確認
+      const pastedLength = await page.evaluate(() => {
+        const editor = document.querySelector('.ProseMirror.note-common-styles__textnote-body') ||
+                       document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+                       document.querySelector('.ProseMirror') ||
+                       document.querySelector('div[contenteditable="true"]');
+        return editor ? editor.innerText.trim().length : 0;
+      });
+
+      if (pastedLength > 100) {
+        logger.info(`HTMLペーストで本文を挿入しました（${pastedLength}文字）`);
+        return true;
+      }
+      logger.info(`ペーストイベントは発火したが内容が不十分（${pastedLength}文字）。フォールバックへ...`);
     }
 
     // 方法2: innerHTML直接設定（フォールバック）
     logger.info('ペースト失敗、innerHTML直接設定を試行...');
     await page.evaluate((html) => {
-      const editor = document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+      const editor = document.querySelector('.ProseMirror.note-common-styles__textnote-body') ||
+                     document.querySelector('div[contenteditable="true"][role="textbox"]') ||
                      document.querySelector('.ProseMirror') ||
-                     document.querySelector('div[contenteditable="true"]') ||
-                     document.querySelector('[role="textbox"]');
+                     document.querySelector('div[contenteditable="true"]');
       if (editor) {
-        editor.innerHTML = html;
-        // React/Vueの変更検知をトリガー
+        // ProseMirrorの場合、最初のheading（タイトル）は残してその後に挿入
+        const heading = editor.querySelector('.heading, h1');
+        if (heading) {
+          // タイトル以降の既存コンテンツをクリア
+          let sibling = heading.nextElementSibling;
+          while (sibling) {
+            const next = sibling.nextElementSibling;
+            sibling.remove();
+            sibling = next;
+          }
+          // HTMLをパースしてタイトルの後に挿入
+          const temp = document.createElement('div');
+          temp.innerHTML = html;
+          while (temp.firstChild) {
+            editor.appendChild(temp.firstChild);
+          }
+        } else {
+          editor.innerHTML = html;
+        }
+        // React/ProseMirrorの変更検知をトリガー
         editor.dispatchEvent(new Event('input', { bubbles: true }));
       }
     }, cleanHtml);
@@ -450,10 +575,10 @@ async function insertBodyContent(page, bodyHtml) {
 
     // 入力確認
     const contentLength = await page.evaluate(() => {
-      const editor = document.querySelector('div[contenteditable="true"][role="textbox"]') ||
+      const editor = document.querySelector('.ProseMirror.note-common-styles__textnote-body') ||
+                     document.querySelector('div[contenteditable="true"][role="textbox"]') ||
                      document.querySelector('.ProseMirror') ||
-                     document.querySelector('div[contenteditable="true"]') ||
-                     document.querySelector('[role="textbox"]');
+                     document.querySelector('div[contenteditable="true"]');
       return editor ? editor.innerText.length : 0;
     });
 
@@ -465,7 +590,7 @@ async function insertBodyContent(page, bodyHtml) {
     // 方法3: キーボード入力（最終フォールバック）
     logger.info('直接設定も失敗、キーボード入力を試行...');
     const plainText = cleanHtml.replace(/<[^>]*>/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
-    await editorEl.click();
+    await editorEl.click({ force: true });
     await page.waitForTimeout(300);
     await page.keyboard.type(plainText.slice(0, 5000), { delay: 5 });
     await page.waitForTimeout(1000);
@@ -473,6 +598,11 @@ async function insertBodyContent(page, bodyHtml) {
     return true;
   } catch (err) {
     logger.error(`本文入力エラー: ${err.message}`);
+    // デバッグ用スクリーンショット
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'body-input-failed.png'), fullPage: true });
+      logger.info('本文入力失敗時のスクリーンショットを保存: logs/body-input-failed.png');
+    } catch { /* ignore */ }
     return false;
   }
 }
@@ -648,36 +778,74 @@ export async function postToNote(article, imageFiles) {
 
     // --- タイトル入力 ---
     logger.info('タイトルを入力中...');
+
+    // note.comエディタのタイトル入力方法:
+    // 1. textarea（旧エディタ）
+    // 2. ProseMirrorの.heading要素（新エディタ - 「記事タイトル」プレースホルダー）
     const titleSelectors = [
       'textarea[placeholder*="タイトル"]',
-      'input[placeholder*="タイトル"]',
-      '[data-testid="title-input"]',
+      'textarea[placeholder*="記事タイトル"]',
+      '.ProseMirror .heading:first-child',
+      '.ProseMirror > h1',
+      '.ProseMirror [data-placeholder*="タイトル"]',
       '[class*="title"] textarea',
       '[class*="title"] input',
-      'textarea:first-of-type',
     ];
 
     let titleFilled = false;
     for (const sel of titleSelectors) {
       try {
         const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
           await el.click();
-          await page.waitForTimeout(300);
-          await el.fill(article.title);
+          await page.waitForTimeout(500);
+
+          // textareaの場合はfill、それ以外はキーボード入力
+          const tagName = await el.evaluate(e => e.tagName.toLowerCase()).catch(() => '');
+          if (tagName === 'textarea' || tagName === 'input') {
+            await el.fill(article.title);
+          } else {
+            // ProseMirror heading要素 — 全選択して上書き
+            await page.keyboard.press('Control+a');
+            await page.waitForTimeout(100);
+            await page.keyboard.type(article.title, { delay: 15 });
+          }
           titleFilled = true;
           logger.info(`タイトル入力完了 (${sel})`);
           break;
+        }
+      } catch (e) {
+        logger.debug?.(`タイトルセレクタ ${sel} 失敗: ${e.message}`);
+      }
+    }
+
+    if (!titleFilled) {
+      // フォールバック: 「記事タイトル」テキストを持つ要素を直接探す
+      logger.warn('タイトル入力欄が見つかりません、プレースホルダー検索を試行...');
+      try {
+        const titleEl = page.locator('[data-placeholder="記事タイトル"], [data-placeholder*="タイトル"]').first();
+        if (await titleEl.isVisible({ timeout: 3000 }).catch(() => false)) {
+          await titleEl.click();
+          await page.waitForTimeout(300);
+          await page.keyboard.type(article.title, { delay: 15 });
+          titleFilled = true;
+          logger.info('タイトル入力完了（data-placeholder検索）');
         }
       } catch {}
     }
 
     if (!titleFilled) {
-      logger.warn('タイトル入力欄が見つかりません、キーボード入力を試行...');
-      await page.keyboard.type(article.title, { delay: 20 });
+      // 最終フォールバック: エディタ最上部にフォーカスしてTabで移動
+      logger.warn('全セレクタ失敗。エディタ先頭にフォーカスしてタイトルを入力...');
+      try {
+        await page.screenshot({ path: resolve(config.paths.logs, 'title-input-failed.png'), fullPage: true });
+      } catch { /* ignore */ }
     }
 
-    await page.waitForTimeout(1000);
+    // タイトル入力後、本文エリアに移動（Enterキー or Tabキー）
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(500);
 
     // --- 本文入力 ---
     await insertBodyContent(page, article.bodyHtml);
