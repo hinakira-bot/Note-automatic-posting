@@ -70,6 +70,16 @@ export default function PipelineProgress({ onClose }) {
     ? Math.round((Date.now() - new Date(status.startedAt).getTime()) / 1000)
     : 0;
 
+  const handleForceReset = async () => {
+    if (!confirm('パイプラインを強制リセットしますか？')) return;
+    try {
+      await fetch('/api/pipeline', { method: 'DELETE' });
+      setStatus(null);
+      setLogs([]);
+      onClose?.();
+    } catch {}
+  };
+
   const formatElapsed = (s) => {
     const m = Math.floor(s / 60);
     const sec = s % 60;
@@ -95,6 +105,14 @@ export default function PipelineProgress({ onClose }) {
         <div className="flex items-center gap-4">
           {elapsed > 0 && (
             <span className="text-sm text-gray-500">{formatElapsed(elapsed)}</span>
+          )}
+          {isRunning && (
+            <button
+              onClick={handleForceReset}
+              className="text-xs text-red-500 hover:text-red-700 border border-red-300 rounded px-2 py-1 cursor-pointer"
+            >
+              強制リセット
+            </button>
           )}
           {!isRunning && (
             <button

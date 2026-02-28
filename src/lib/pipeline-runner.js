@@ -57,11 +57,11 @@ function onProgress({ step, message, progress, keyword, title }) {
 /** パイプラインを開始 */
 export async function startPipeline(options = {}) {
   if (state.running) {
-    // 10分以上経過している場合は強制リセット（ハングアップ対策）
+    // 3分以上経過している場合は強制リセット（ハングアップ対策）
     const elapsed = state.startedAt
       ? (Date.now() - new Date(state.startedAt).getTime()) / 1000
       : 0;
-    if (elapsed > 600) {
+    if (elapsed > 180) {
       state.running = false;
       addLog('warn', '前回のパイプラインがタイムアウトしました。強制リセットします。');
     } else {
@@ -130,6 +130,21 @@ export function getStatus() {
     logs: [...state.logs],
     result: state.result,
   };
+}
+
+/** パイプラインを強制リセット */
+export function resetPipeline() {
+  const wasRunning = state.running;
+  state.running = false;
+  state.step = 'idle';
+  state.progress = 0;
+  state.result = null;
+  state.keyword = '';
+  state.title = '';
+  state.startedAt = null;
+  state.logs = [];
+  broadcast({ type: 'reset' });
+  return { reset: true, wasRunning };
 }
 
 /** SSEリスナー登録 */
