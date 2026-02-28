@@ -637,10 +637,12 @@ async function insertDiagramImage(page, imagePath, h2Text) {
     await page.waitForTimeout(500);
 
     // === Step 2: カーソルを挿入位置に配置 ===
-    const placeholderFound = await page.evaluate((targetH2) => {
+    // ProseMirrorは独自の状態管理をするため、DOM Selection APIではなく
+    // Playwrightのlocator.click()でProseMirrorのイベントハンドラを経由する
+    const cursorResult = await page.evaluate((targetH2) => {
       const editor = document.querySelector('.ProseMirror') ||
                      document.querySelector('div[contenteditable="true"][role="textbox"]');
-      if (!editor) return false;
+      if (!editor) return { type: 'not_found' };
 
       // プレースホルダーテキストを探す
       const paragraphs = editor.querySelectorAll('p, .paragraph');
@@ -654,44 +656,47 @@ async function insertDiagramImage(page, imagePath, h2Text) {
           const sel = window.getSelection();
           sel.removeAllRanges();
           sel.addRange(range);
-          return true;
+          return { type: 'placeholder' };
         }
       }
 
-      // h2の直後にカーソルを配置
+      // h2のインデックスを返す（Playwrightのlocatorで直接クリックするため）
       if (targetH2) {
-        const headings = editor.querySelectorAll('h2, .heading');
-        for (const h of headings) {
-          if (h.textContent.trim().includes(targetH2.slice(0, 15))) {
-            const nextEl = h.nextElementSibling;
-            if (nextEl) {
-              nextEl.click();
-              const range = document.createRange();
-              range.setStart(nextEl, 0);
-              range.collapse(true);
-              const sel = window.getSelection();
-              sel.removeAllRanges();
-              sel.addRange(range);
-              return 'after_h2';
-            }
+        const headings = editor.querySelectorAll('h2');
+        for (let i = 0; i < headings.length; i++) {
+          if (headings[i].textContent.trim().includes(targetH2.slice(0, 15))) {
+            return { type: 'h2_found', index: i, text: headings[i].textContent.trim().slice(0, 30) };
           }
         }
       }
-      return false;
+      return { type: 'not_found' };
     }, h2Text);
 
-    if (placeholderFound === true) {
+    if (cursorResult.type === 'placeholder') {
       // プレースホルダーを削除して空の段落にする
       await page.keyboard.press('Backspace');
       await page.waitForTimeout(500);
       logger.info('プレースホルダーテキストを削除しました');
-    } else if (placeholderFound === 'after_h2') {
-      // h2直後に新しい空行を作成してカーソルを配置
-      await page.keyboard.press('Home');
-      await page.keyboard.press('Enter');
-      await page.keyboard.press('ArrowUp');
-      await page.waitForTimeout(300);
-      logger.info('h2直後にカーソルを配置しました');
+    } else if (cursorResult.type === 'h2_found') {
+      // Playwrightのlocatorでh2要素を直接クリック（ProseMirrorの状態が正しく更新される）
+      const h2El = page.locator('.ProseMirror h2').nth(cursorResult.index);
+      const h2Visible = await h2El.isVisible({ timeout: 3000 }).catch(() => false);
+      if (h2Visible) {
+        await h2El.click({ force: true });
+        await page.waitForTimeout(300);
+        // End: h2テキストの末尾へ → Enter: h2の直下に新しい空の段落を作成
+        await page.keyboard.press('End');
+        await page.waitForTimeout(200);
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(300);
+        logger.info(`h2[${cursorResult.index}]「${cursorResult.text}」の直下にカーソルを配置しました`);
+      } else {
+        logger.warn(`h2[${cursorResult.index}]が表示されていません。エディタ末尾に挿入します`);
+        await editor.click({ force: true });
+        await page.keyboard.press('Control+End');
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(300);
+      }
     } else {
       // 見つからない場合でもエディタ末尾に新しい行を作成
       logger.warn('図解画像の挿入位置が見つかりません。エディタ末尾に挿入します');

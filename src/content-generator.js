@@ -85,7 +85,36 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
   });
 
   const result = await textModel.generateContent(prompt);
-  return result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
+  let bodyHtml = result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
+
+  // 1文ずつ改段落に変換（スマホ読みやすさ対応）
+  bodyHtml = splitSentencesToParagraphs(bodyHtml);
+  logger.info(`本文の1文改段落処理を適用しました`);
+
+  return bodyHtml;
+}
+
+/**
+ * <p>タグ内の複数文を1文ずつ個別の<p>タグに分割
+ * スマホでの読みやすさを重視し、各文を独立した段落にする
+ */
+function splitSentencesToParagraphs(html) {
+  return html.replace(/<p>([\s\S]*?)<\/p>/gi, (match, content) => {
+    // 短い段落（1文程度）はそのまま
+    const textOnly = content.replace(/<[^>]*>/g, '');
+    if (textOnly.length < 60) return match;
+
+    // 日本語の文末（。！？）の後ろで分割
+    // ただし閉じ括弧・引用符の直前では分割しない
+    const parts = content
+      .split(/(?<=[。！？!?])\s*(?=[^）」』】\)>\s<]|<(?!\/))/)
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+
+    if (parts.length <= 1) return match;
+
+    return parts.map(s => `<p>${s}</p>`).join('\n');
+  });
 }
 
 /**
