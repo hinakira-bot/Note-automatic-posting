@@ -58,6 +58,15 @@ if [ ! -f .env ]; then
     read -p "Gemini APIキー: " GEMINI_KEY
     read -p "Noteメールアドレス: " NOTE_EMAIL
     read -p "Noteパスワード: " NOTE_PASS
+    echo ""
+    echo -e "${YELLOW}--- Web UI 認証設定 ---${NC}"
+    echo -e "外部からWeb UIにアクセスする場合、認証を設定してください。"
+    read -p "Web UI ユーザー名（空欄でスキップ）: " WEB_USER
+    WEB_PASS=""
+    if [ -n "$WEB_USER" ]; then
+        read -sp "Web UI パスワード: " WEB_PASS
+        echo ""
+    fi
 
     cat > .env << EOF
 GEMINI_API_KEY=${GEMINI_KEY}
@@ -69,6 +78,8 @@ CRON_SCHEDULE=0 9 * * *
 POST_CATEGORY=
 ARTICLE_MIN_LENGTH=2000
 ARTICLE_MAX_LENGTH=4000
+WEB_USER=${WEB_USER}
+WEB_PASSWORD=${WEB_PASS}
 DRY_RUN=false
 LOG_LEVEL=info
 EOF

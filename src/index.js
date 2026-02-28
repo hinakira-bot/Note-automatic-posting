@@ -474,4 +474,79 @@ program
     process.exit(result ? 0 : 1);
   });
 
+// ============================================================
+//  セッション管理コマンド
+// ============================================================
+
+// === session-export: セッションをエクスポート（ローカル → VPS） ===
+program
+  .command('session-export')
+  .description('note.comログインセッションをBase64テキストにエクスポート')
+  .option('-o, --output <file>', 'ファイルに出力（省略時は標準出力）')
+  .action(async (opts) => {
+    const { readFileSync, writeFileSync, existsSync } = await import('fs');
+    const { resolve } = await import('path');
+    const sessionPath = resolve(config.paths.session, 'state.json');
+
+    if (!existsSync(sessionPath)) {
+      console.log('\n❌ セッションファイルが見つかりません。');
+      console.log('   先に npm run test:login でログインしてください。');
+      process.exit(1);
+    }
+
+    const data = readFileSync(sessionPath, 'utf-8');
+    const encoded = Buffer.from(data).toString('base64');
+
+    if (opts.output) {
+      writeFileSync(opts.output, encoded, 'utf-8');
+      console.log(`\n✅ セッションをエクスポートしました: ${opts.output}`);
+      console.log(`   VPS側で以下を実行:`);
+      console.log(`   node src/index.js session-import ${opts.output}`);
+    } else {
+      console.log('\n--- セッションデータ (Base64) ---');
+      console.log(encoded);
+      console.log('--- ここまで ---');
+      console.log('\nVPS側で以下を実行:');
+      console.log('  node src/index.js session-import "上記のBase64文字列"');
+    }
+  });
+
+// === session-import: セッションをインポート（VPS側で実行） ===
+program
+  .command('session-import')
+  .description('Base64テキストからセッションを復元（VPS側で実行）')
+  .argument('<input>', 'Base64文字列 または エクスポートファイルのパス')
+  .action(async (input) => {
+    const { writeFileSync, readFileSync, existsSync, mkdirSync } = await import('fs');
+    const { resolve } = await import('path');
+
+    let base64Data;
+
+    // ファイルパスかBase64文字列か判定
+    if (existsSync(input)) {
+      base64Data = readFileSync(input, 'utf-8').trim();
+      console.log(`ファイルからインポート: ${input}`);
+    } else {
+      base64Data = input.trim();
+    }
+
+    try {
+      const json = Buffer.from(base64Data, 'base64').toString('utf-8');
+      // JSON形式であることを確認
+      JSON.parse(json);
+
+      // セッションディレクトリを作成
+      mkdirSync(config.paths.session, { recursive: true });
+
+      const sessionPath = resolve(config.paths.session, 'state.json');
+      writeFileSync(sessionPath, json, 'utf-8');
+      console.log(`\n✅ セッションをインポートしました: ${sessionPath}`);
+      console.log('   次回の投稿時にこのセッションが使用されます。');
+    } catch (err) {
+      console.log(`\n❌ インポートエラー: ${err.message}`);
+      console.log('   有効なBase64エンコードされたセッションデータを指定してください。');
+      process.exit(1);
+    }
+  });
+
 program.parse();

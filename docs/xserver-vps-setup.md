@@ -471,6 +471,92 @@ pm2 restart note-tool
 
 ---
 
+## 13. セッション転送（ローカル → VPS）
+
+VPSのheadlessブラウザではnote.comのCAPTCHAが出る場合があります。
+ローカルPCでログインしたセッションをVPSに転送することで回避できます。
+
+### ローカルPCで実行
+
+```bash
+cd C:\Users\あなた\note-auto-poster
+
+# セッションをBase64テキストとしてエクスポート
+node src/index.js session-export -o session-backup.txt
+```
+
+### VPSに転送 & インポート
+
+```bash
+# ファイルをVPSに転送
+scp session-backup.txt noteuser@あなたのIP:/opt/note-tool/
+
+# VPS側でインポート
+ssh noteuser@あなたのIP
+cd /opt/note-tool
+node src/index.js session-import session-backup.txt
+
+# 不要なファイルを削除
+rm session-backup.txt
+```
+
+> セッションの有効期限が切れたら、ローカルで `npm run test:login` して再度転送してください。
+
+---
+
+## 14. Web UI 認証設定
+
+VPS運用時は外部からWeb UIにアクセスできるため、Basic認証を設定してください。
+
+### 設定方法
+
+`.env` に以下を追加：
+
+```
+WEB_USER=admin
+WEB_PASSWORD=あなたの安全なパスワード
+```
+
+設定後に再起動：
+
+```bash
+pm2 restart note-tool
+```
+
+> `WEB_USER` と `WEB_PASSWORD` が両方設定されている場合のみ認証が有効になります。
+> ローカル開発時は空欄でOKです。
+
+---
+
+## 15. 自動投稿スケジュール
+
+PM2でNext.jsを起動すると、サーバー起動時にcronスケジューラーが自動開始されます。
+`.env` の `CRON_SCHEDULE` で投稿時刻を設定できます。
+
+```
+# 毎日9時に投稿
+CRON_SCHEDULE=0 9 * * *
+
+# 毎日9時と15時に投稿
+CRON_SCHEDULE=0 9,15 * * *
+
+# 平日のみ10時に投稿
+CRON_SCHEDULE=0 10 * * 1-5
+```
+
+Web UIの「設定」ページからも変更可能です。
+
+### 動作確認
+
+PM2のログで以下が表示されていればOK：
+
+```bash
+pm2 logs note-tool --lines 5
+# → [cron] 自動投稿スケジュール開始: 0 9 * * *
+```
+
+---
+
 ## 費用まとめ
 
 | 項目 | 費用 |
