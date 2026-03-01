@@ -1,21 +1,34 @@
-Create an informative diagram/infographic that visually explains the following concept:
-"{{diagramDescription}}"
+以下の内容を、シンプルで分かりやすい図解画像にしてください。
 
-Context: This is a section of a Japanese blog post with the heading "{{sectionH2}}"
-Sub-topics: {{sectionH3s}}
+内容: "{{diagramDescription}}"
+見出し: "{{sectionH2}}"
+サブトピック: {{sectionH3s}}
 
-Requirements:
-- Clean, simple infographic style
-- Use icons, arrows, and simple shapes
-- Include minimal Japanese text labels if needed
-- Light background (white or very light gray)
-- Easy to understand at a glance
-- Suitable for embedding in a blog article
-- 16:9 aspect ratio
+## 最重要ルール: シンプルさ
+- **要素は最小限にする（3〜5個まで）**
+- **テキストは極力短く（1要素あたり10文字以内）**
+- **余白をたっぷり取り、ごちゃごちゃさせない**
+- **一目で理解できること**が最優先
 
-・h2見出しについて、その中で語られている内容を、テキストは少な目で簡潔に理解できる図解画像にして生成。
-・h2見出し直下に配置する。横長サイズ。
-・背景色は白か、薄く淡いカラー。 
-・表示するテキストは日本語ベース。
-・内容が手順やハウツーであればスクリーンショット風画像を作成。
-・見出しタイトルは表示しないでOK。キャラは「いらすと屋」風（おしゃれなキャラ）に。
+## デザインルール
+- 16:9（横長）のアスペクト比
+- 背景: 白 or 淡いパステルカラー（1色）
+- アイコンは最大3個まで。シンプルなフラットアイコン
+- 矢印・線は太めで見やすく、色は1〜2色に統一
+- フォントは大きく読みやすく。細かい文字は入れない
+- キャラクターを入れる場合は1体のみ。いらすとや風のおしゃれでシンプルなキャラ
+
+## 図解のパターン（内容に合わせて最適なものを1つ選択）
+1. **フロー図**: 手順・流れ → 左から右に2〜4ステップで矢印接続
+2. **比較図**: 2つの概念 → 左右に分けてシンプルに対比
+3. **構成図**: 要素の関係 → 中央に主題、周囲に2〜3要素
+4. **チェックリスト風**: ポイント列挙 → チェックマーク付き3〜4項目
+
+## 禁止事項
+- 見出しタイトルは画像内に入れない
+- 細かすぎる文字や説明文
+- 5個以上のボックスやアイコンを並べない
+- グラデーションの多用（フラットなデザインを維持）
+- 複雑な図形やオーバーラップ
+
+テキストは日本語で表示してください。

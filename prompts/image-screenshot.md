@@ -1,24 +1,28 @@
-Create a realistic screenshot-style mockup image showing the following operation/procedure:
-"{{diagramDescription}}"
+以下の操作手順を、スクリーンショット風のモックアップ画像にしてください。
 
-Context: This is a section of a Japanese how-to blog post with the heading "{{sectionH2}}"
-Sub-topics: {{sectionH3s}}
-Related tool/service: {{keyword}}
+内容: "{{diagramDescription}}"
+見出し: "{{sectionH2}}"
+サブトピック: {{sectionH3s}}
+関連ツール: {{keyword}}
 
-Requirements:
-- Realistic screenshot/UI mockup style (not a diagram or infographic)
-- Show a realistic-looking application interface, web page, or tool screen
-- Include Japanese text in the UI elements (menus, buttons, labels)
-- Show mouse cursor or highlighted areas to indicate where to click/interact
-- Include numbered callouts or arrows pointing to key UI elements
-- Light background, clean and professional appearance
-- 16:9 aspect ratio (landscape)
-- Should look like an actual screenshot from the tool/service being explained
+## 最重要ルール: シンプルさ
+- **画面要素は最小限にする**
+- **注目ポイントは1〜2箇所に絞る**
+- **余計なUI要素は省略してスッキリと**
+- **一目でどこを操作するか分かること**が最優先
 
-・実際のアプリ/Webサービスの操作画面のようなリアルなモックアップ画像を生成。
-・UIのボタン、メニュー、入力フォームなどが見える操作画面風にする。
-・手順を示す番号付き吹き出しや矢印を入れて、どこを操作するか分かりやすくする。
-・テキストは日本語で表示。
-・横長（16:9）サイズ。
-・背景は白系。画面の枠（ブラウザウィンドウ風）を含めるとよりリアル。
-・見出しタイトルは表示しないでOK。
+## デザインルール
+- 16:9（横長）のアスペクト比
+- リアルなアプリ/Web画面風のモックアップ
+- ブラウザウィンドウ枠を含める（シンプルな枠線）
+- 背景は白系。画面内もクリーンに
+- 操作箇所を赤い丸や矢印で1〜2箇所だけハイライト
+- 番号付き吹き出しは最大3個まで
+
+## 禁止事項
+- 見出しタイトルは画像内に入れない
+- 画面内に大量のメニュー項目やボタンを描かない
+- 小さすぎて読めないテキスト
+- 5個以上の注釈や矢印
+
+テキストは日本語で表示してください。
