@@ -267,6 +267,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * note.com エディタでカバー画像をアップロード
+ *
+ * note.comの見出し画像アップロードは2段階:
+ * 1. カバー画像エリアのボタンをクリック → ドロップダウンメニューが表示
+ * 2. メニューから「画像をアップロード」を選択 → filechooserが発火
  */
 async function uploadCoverImage(page, imagePath) {
   if (!imagePath || !existsSync(imagePath)) {
@@ -277,130 +281,456 @@ async function uploadCoverImage(page, imagePath) {
   try {
     logger.info(`カバー画像アップロード中: ${imagePath}`);
 
-    // カバー画像エリアをクリック（「見出し画像」エリア）
-    const coverSelectors = [
-      'button[aria-label="画像を追加"]',
-      'button:has-text("画像をアップロード")',
-      '[data-testid="header-image"]',
-      '.p-editor__header-image',
-      'button:has-text("見出し画像")',
-      '.header-image-area',
-      '[class*="headerImage"]',
-      '[class*="cover"]',
-      '[class*="eyecatch"]',
+    // デバッグ: 現在のページ状態をスクリーンショット
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'before-cover-upload.png'), fullPage: true });
+    } catch { /* ignore */ }
+
+    // デバッグ: エディタ上部のDOM構造を確認
+    const topButtons = await page.evaluate(() => {
+      const main = document.querySelector('main') || document.body;
+      const allBtns = Array.from(main.querySelectorAll('button'));
+      return allBtns
+        .filter(b => {
+          const rect = b.getBoundingClientRect();
+          return rect.top < 200 && b.offsetParent !== null;
+        })
+        .map(b => ({
+          text: b.textContent.trim().slice(0, 50),
+          class: b.className.slice(0, 100),
+          ariaLabel: b.getAttribute('aria-label') || '',
+          rect: {
+            top: Math.round(b.getBoundingClientRect().top),
+            left: Math.round(b.getBoundingClientRect().left),
+            width: Math.round(b.getBoundingClientRect().width),
+            height: Math.round(b.getBoundingClientRect().height),
+          },
+          html: b.outerHTML.slice(0, 200),
+        }));
+    }).catch(() => []);
+    logger.info(`エディタ上部のボタン(top<200px): ${JSON.stringify(topButtons)}`);
+
+    // === 方法A: 2段階クリック（メニュー経由） ===
+    let coverUploaded = false;
+
+    // Step 1: カバー画像エリアのボタンをクリック（メニューを開く）
+    const coverAreaSelectors = [
+      // note.com エディタの見出し画像ボタン（エディタ最上部の小さなボタン）
+      'main button:first-of-type',
+      'main > div:first-child button',
+      'main > div > div:first-child button',
+      'button[aria-label*="画像"]',
+      'button[aria-label*="見出し"]',
+      'button[aria-label*="カバー"]',
+      'button[aria-label*="header"]',
+      '[class*="headerImage"] button',
+      '[class*="cover"] button',
+      '[class*="eyecatch"] button',
     ];
 
-    let coverClicked = false;
-    for (const sel of coverSelectors) {
+    for (const sel of coverAreaSelectors) {
       try {
         const el = page.locator(sel).first();
         if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-          // filechooser イベントを待機しつつクリック
-          const [fileChooser] = await Promise.all([
-            page.waitForEvent('filechooser', { timeout: 10000 }),
-            el.click(),
-          ]);
-          await fileChooser.setFiles(imagePath);
-          coverClicked = true;
-          break;
+          // ボタンの位置を確認（カバー画像ボタンはエディタ上部にあるはず）
+          const box = await el.boundingBox().catch(() => null);
+          if (box && box.y > 400) continue; // 画面下部のボタンはスキップ
+
+          logger.info(`カバー画像エリアをクリック: ${sel} (y=${box?.y})`);
+          await el.click();
+          await page.waitForTimeout(1500);
+
+          // Step 2: ドロップダウンメニューから「画像をアップロード」を選択
+          const uploadMenuSelectors = [
+            'button:has-text("画像をアップロード")',
+            'button:text-is("画像をアップロード")',
+            'div[role="menu"] button:first-of-type',
+            'div[role="listbox"] button:first-of-type',
+            '[class*="dropdown"] button:has-text("アップロード")',
+            '[class*="menu"] button:has-text("アップロード")',
+            '[class*="popup"] button:has-text("アップロード")',
+          ];
+
+          let menuFound = false;
+          for (const menuSel of uploadMenuSelectors) {
+            try {
+              const menuBtn = page.locator(menuSel).first();
+              if (await menuBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+                logger.info(`アップロードメニュー項目発見: ${menuSel}`);
+                // filechooserを待機しつつメニュー項目をクリック
+                const [fileChooser] = await Promise.all([
+                  page.waitForEvent('filechooser', { timeout: 15000 }),
+                  menuBtn.click(),
+                ]);
+                await fileChooser.setFiles(imagePath);
+                coverUploaded = true;
+                menuFound = true;
+                logger.info('filechooserでファイルを設定しました');
+                break;
+              }
+            } catch (menuErr) {
+              logger.debug?.(`メニュー項目 ${menuSel} 失敗: ${menuErr.message}`);
+            }
+          }
+
+          if (menuFound) break;
+
+          // メニューが見つからない場合、直接filechooserが発火するパターンかも
+          // （古いUIの場合は1クリックで直接filechooserが開く可能性あり）
+          logger.info('メニューが見つかりません。直接filechooser待機を試行...');
         }
-      } catch {}
+      } catch (e) {
+        logger.debug?.(`カバーセレクタ ${sel} 失敗: ${e.message}`);
+      }
     }
 
-    if (!coverClicked) {
-      // フォールバック: ページ上部の画像追加エリアを探す
-      logger.info('カバー画像ボタンが見つからないため、代替方法を試行...');
+    // === 方法B: 1段階直接クリック（filechooserが直接開くパターン） ===
+    if (!coverUploaded) {
+      logger.info('方法A失敗。1段階直接クリックを試行...');
+
+      const directSelectors = [
+        'main button:first-of-type',
+        'main > div:first-child button',
+        '[class*="Header"] button',
+        '[class*="header"] button:first-of-type',
+      ];
+
+      for (const sel of directSelectors) {
+        try {
+          const el = page.locator(sel).first();
+          if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+            const box = await el.boundingBox().catch(() => null);
+            if (box && box.y > 300) continue;
+
+            logger.info(`直接filechooser試行: ${sel} (y=${box?.y})`);
+            try {
+              const [fileChooser] = await Promise.all([
+                page.waitForEvent('filechooser', { timeout: 8000 }),
+                el.click(),
+              ]);
+              await fileChooser.setFiles(imagePath);
+              coverUploaded = true;
+              logger.info('直接filechooserでファイルを設定しました');
+              break;
+            } catch {
+              // filechooserが発火しなかった場合、メニューが開いている可能性
+              // メニュー内のボタンを再探索
+              const visibleMenuBtns = await page.evaluate(() => {
+                const btns = Array.from(document.querySelectorAll('button'));
+                return btns
+                  .filter(b => b.offsetParent !== null && b.textContent.includes('アップロード'))
+                  .map(b => ({ text: b.textContent.trim().slice(0, 50), class: b.className.slice(0, 80) }));
+              }).catch(() => []);
+
+              if (visibleMenuBtns.length > 0) {
+                logger.info(`メニュー内アップロードボタン発見: ${JSON.stringify(visibleMenuBtns)}`);
+                try {
+                  const uploadBtn = page.locator('button:has-text("アップロード")').first();
+                  const [fileChooser] = await Promise.all([
+                    page.waitForEvent('filechooser', { timeout: 10000 }),
+                    uploadBtn.click(),
+                  ]);
+                  await fileChooser.setFiles(imagePath);
+                  coverUploaded = true;
+                  logger.info('メニュー経由でファイルを設定しました');
+                  break;
+                } catch {}
+              }
+
+              // Escで閉じて次のセレクタを試す
+              await page.keyboard.press('Escape');
+              await page.waitForTimeout(500);
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // === 方法C: SVGアイコンやimgタグをクリック（アイコンベースUI） ===
+    if (!coverUploaded) {
+      logger.info('方法B失敗。SVGアイコン検索を試行...');
       try {
-        const [fileChooser] = await Promise.all([
-          page.waitForEvent('filechooser', { timeout: 10000 }),
-          page.locator('[class*="Header"] button, [class*="header"] button').first().click(),
-        ]);
-        await fileChooser.setFiles(imagePath);
-        coverClicked = true;
-      } catch {}
+        // エディタ上部のSVGアイコン（カメラ/画像アイコン）を探す
+        const iconElement = await page.evaluate(() => {
+          const svgs = Array.from(document.querySelectorAll('main svg, main img'));
+          for (const svg of svgs) {
+            const rect = svg.getBoundingClientRect();
+            // エディタ上部（y < 200）にある小さなアイコン
+            if (rect.top < 200 && rect.width < 100 && rect.height < 100) {
+              const parent = svg.closest('button') || svg.closest('div[role="button"]') || svg.parentElement;
+              if (parent) {
+                return {
+                  found: true,
+                  tag: parent.tagName,
+                  class: parent.className?.toString()?.slice(0, 100) || '',
+                  y: Math.round(rect.top),
+                };
+              }
+            }
+          }
+          return { found: false };
+        }).catch(() => ({ found: false }));
+
+        if (iconElement.found) {
+          logger.info(`SVGアイコンの親要素発見: ${JSON.stringify(iconElement)}`);
+
+          // SVGアイコンの親要素をクリック
+          const iconBtn = page.locator('main svg, main img').first();
+          const parentBtn = iconBtn.locator('..');
+          await parentBtn.click();
+          await page.waitForTimeout(1500);
+
+          // メニューが開いたかチェック
+          const uploadOpt = page.locator('button:has-text("画像をアップロード"), button:has-text("アップロード")').first();
+          if (await uploadOpt.isVisible({ timeout: 3000 }).catch(() => false)) {
+            const [fileChooser] = await Promise.all([
+              page.waitForEvent('filechooser', { timeout: 15000 }),
+              uploadOpt.click(),
+            ]);
+            await fileChooser.setFiles(imagePath);
+            coverUploaded = true;
+            logger.info('SVGアイコン経由でファイルを設定しました');
+          }
+        }
+      } catch (e) {
+        logger.debug?.(`SVGアイコン検索失敗: ${e.message}`);
+      }
     }
 
-    if (!coverClicked) {
-      logger.warn('カバー画像のアップロードボタンが見つかりませんでした');
+    // === 方法D: input[type="file"]に直接設定（hidden inputがある場合） ===
+    if (!coverUploaded) {
+      logger.info('方法C失敗。hidden input[type="file"]を探索...');
+      try {
+        const fileInputs = page.locator('input[type="file"]');
+        const count = await fileInputs.count();
+        if (count > 0) {
+          logger.info(`input[type="file"]が${count}個見つかりました。最初のものにファイルを設定...`);
+          await fileInputs.first().setInputFiles(imagePath);
+          coverUploaded = true;
+          logger.info('hidden input経由でファイルを設定しました');
+        }
+      } catch (e) {
+        logger.debug?.(`hidden input設定失敗: ${e.message}`);
+      }
+    }
+
+    // === 方法E: API経由でアイキャッチ設定（最終フォールバック） ===
+    if (!coverUploaded) {
+      logger.info('全UI方法失敗。API経由でのアップロードを試行...');
+      try {
+        coverUploaded = await uploadCoverImageViaAPI(page, imagePath);
+      } catch (e) {
+        logger.warn(`API経由アップロード失敗: ${e.message}`);
+      }
+    }
+
+    if (!coverUploaded) {
+      logger.warn('カバー画像のアップロードに全方法で失敗しました');
+      try {
+        await page.screenshot({ path: resolve(config.paths.logs, 'cover-upload-failed.png'), fullPage: true });
+      } catch { /* ignore */ }
       return false;
     }
 
     await page.waitForTimeout(3000);
 
-    // トリミングダイアログ（reactEasyCrop）の検出と処理
-    // note.com はカバー画像アップロード後にトリミングUIを表示する
-    const hasCropper = await page.locator('[data-testid="cropper"], .reactEasyCrop_CropArea, .ReactModalPortal .reactEasyCrop_Container').first()
-      .isVisible({ timeout: 5000 }).catch(() => false);
-
-    if (hasCropper) {
-      logger.info('トリミングダイアログを検出しました。確認ボタンを探しています...');
-
-      // デバッグ: ダイアログ内のボタンを列挙
-      const dialogButtons = await page.evaluate(() => {
-        const modal = document.querySelector('.ReactModalPortal') || document;
-        const buttons = Array.from(modal.querySelectorAll('button'));
-        return buttons
-          .filter(b => b.offsetParent !== null)
-          .map(b => ({ text: b.textContent.trim().slice(0, 50), class: b.className.slice(0, 80) }));
-      }).catch(() => []);
-      logger.info(`トリミングダイアログ内のボタン: ${JSON.stringify(dialogButtons)}`);
-
-      // 確認ボタンを押す
-      const trimConfirmSelectors = [
-        '.ReactModalPortal button:has-text("保存")',
-        '.ReactModalPortal button:has-text("適用")',
-        '.ReactModalPortal button:has-text("完了")',
-        '.ReactModalPortal button:has-text("OK")',
-        '.ReactModalPortal button:has-text("決定")',
-        'button:has-text("保存")',
-        'button:has-text("適用")',
-        'button:has-text("完了")',
-        'button:has-text("OK")',
-        '[data-testid="crop-confirm"]',
-      ];
-
-      let trimClosed = false;
-      for (const sel of trimConfirmSelectors) {
-        try {
-          const btn = page.locator(sel).first();
-          if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-            await btn.click({ force: true });
-            logger.info(`トリミングダイアログを確認: ${sel}`);
-            trimClosed = true;
-            await page.waitForTimeout(2000);
-            break;
-          }
-        } catch {}
-      }
-
-      if (!trimClosed) {
-        // フォールバック: Escキーでダイアログを閉じる
-        logger.warn('トリミング確認ボタンが見つかりません。Escキーで閉じます...');
-        await page.keyboard.press('Escape');
-        await page.waitForTimeout(2000);
-      }
-
-      // ダイアログが閉じたか確認
-      const stillHasCropper = await page.locator('[data-testid="cropper"], .reactEasyCrop_CropArea').first()
-        .isVisible({ timeout: 2000 }).catch(() => false);
-      if (stillHasCropper) {
-        logger.warn('トリミングダイアログがまだ表示されています。スクリーンショットを保存...');
-        try {
-          await page.screenshot({ path: resolve(config.paths.logs, 'cropper-stuck.png'), fullPage: true });
-        } catch { /* ignore */ }
-        // 最終手段: Enterキーで確定
-        await page.keyboard.press('Enter');
-        await page.waitForTimeout(2000);
-      }
-    } else {
-      logger.info('トリミングダイアログなし。そのまま続行。');
-    }
+    // === トリミングダイアログの処理 ===
+    await handleCropperDialog(page);
 
     logger.info('カバー画像をアップロードしました');
     return true;
   } catch (err) {
     logger.warn(`カバー画像アップロードエラー: ${err.message}`);
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'cover-upload-error.png'), fullPage: true });
+    } catch { /* ignore */ }
     return false;
+  }
+}
+
+/**
+ * API経由でカバー画像をアップロード（UIが失敗した場合のフォールバック）
+ * note.com の非公式API: POST /api/v1/upload_image でアップロード
+ */
+async function uploadCoverImageViaAPI(page, imagePath) {
+  const { readFileSync } = await import('fs');
+  const imageBuffer = readFileSync(imagePath);
+  const base64Image = imageBuffer.toString('base64');
+  const ext = imagePath.toLowerCase().endsWith('.png') ? 'png' : 'jpeg';
+  const mimeType = `image/${ext}`;
+
+  // ページのcookieを使ってAPI呼び出し
+  const result = await page.evaluate(async ({ base64Image, mimeType, ext }) => {
+    try {
+      // Base64をBlobに変換
+      const byteChars = atob(base64Image);
+      const byteNumbers = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) {
+        byteNumbers[i] = byteChars.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: mimeType });
+
+      // FormDataでアップロード
+      const formData = new FormData();
+      formData.append('image', blob, `cover.${ext}`);
+
+      const response = await fetch('https://note.com/api/v1/upload_image', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        return { success: false, error: `HTTP ${response.status}` };
+      }
+
+      const data = await response.json();
+      return {
+        success: true,
+        imageKey: data?.data?.key || null,
+        imageUrl: data?.data?.url || null,
+      };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }, { base64Image, mimeType, ext }).catch(err => ({ success: false, error: err.message }));
+
+  if (!result.success) {
+    logger.warn(`API画像アップロード失敗: ${result.error}`);
+    return false;
+  }
+
+  logger.info(`API画像アップロード成功: key=${result.imageKey}`);
+
+  // アップロード後、エディタのUIに反映させるため、ページをリロードせずにDOMを操作
+  // note.com のエディタは React/Redux ベースなので、API呼び出し後に
+  // ドラフト保存APIで eyecatch_image_key を設定するのが確実
+  if (result.imageKey) {
+    // 現在のエディタURLからarticle IDを取得（ドラフト保存済みの場合）
+    const pageUrl = page.url();
+    const articleIdMatch = pageUrl.match(/\/(\d+)(?:\?|$)/);
+
+    if (articleIdMatch) {
+      const articleId = articleIdMatch[1];
+      const saveResult = await page.evaluate(async ({ articleId, imageKey }) => {
+        try {
+          const response = await fetch(`https://note.com/api/v1/text_notes/draft_save?id=${articleId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ eyecatch_image_key: imageKey }),
+            credentials: 'include',
+          });
+          return { success: response.ok, status: response.status };
+        } catch (err) {
+          return { success: false, error: err.message };
+        }
+      }, { articleId, imageKey: result.imageKey }).catch(err => ({ success: false, error: err.message }));
+
+      if (saveResult.success) {
+        logger.info(`APIでアイキャッチ設定完了: articleId=${articleId}`);
+        // ページをリロードしてUIに反映
+        await page.reload({ waitUntil: 'networkidle' }).catch(() => {});
+        await page.waitForTimeout(3000);
+        return true;
+      }
+      logger.warn(`APIドラフト保存失敗: ${JSON.stringify(saveResult)}`);
+    } else {
+      logger.info('記事IDが未確定（新規記事）。API eyecatch設定は投稿後に行います。');
+      // imageKeyを返してpostToNoteで使えるようにする
+      // グローバル変数に保持
+      global.__pendingEyecatchKey = result.imageKey;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * トリミングダイアログ（reactEasyCrop）の検出と処理
+ */
+async function handleCropperDialog(page) {
+  const cropperSelectors = [
+    '[data-testid="cropper"]',
+    '.reactEasyCrop_CropArea',
+    '.ReactModalPortal .reactEasyCrop_Container',
+    '[class*="cropper"]',
+    '[class*="Cropper"]',
+    '[class*="crop-area"]',
+  ];
+
+  let hasCropper = false;
+  for (const sel of cropperSelectors) {
+    if (await page.locator(sel).first().isVisible({ timeout: 3000 }).catch(() => false)) {
+      hasCropper = true;
+      break;
+    }
+  }
+
+  if (!hasCropper) {
+    logger.info('トリミングダイアログなし。そのまま続行。');
+    return;
+  }
+
+  logger.info('トリミングダイアログを検出しました。確認ボタンを探しています...');
+
+  // デバッグ: ダイアログ内のボタンを列挙
+  const dialogButtons = await page.evaluate(() => {
+    const modal = document.querySelector('.ReactModalPortal') || document;
+    const buttons = Array.from(modal.querySelectorAll('button'));
+    return buttons
+      .filter(b => b.offsetParent !== null)
+      .map(b => ({ text: b.textContent.trim().slice(0, 50), class: b.className.slice(0, 80) }));
+  }).catch(() => []);
+  logger.info(`トリミングダイアログ内のボタン: ${JSON.stringify(dialogButtons)}`);
+
+  // 確認ボタンを押す（OKボタン）
+  const trimConfirmSelectors = [
+    '.ReactModalPortal button:has-text("OK")',
+    '.ReactModalPortal button:has-text("保存")',
+    '.ReactModalPortal button:has-text("適用")',
+    '.ReactModalPortal button:has-text("完了")',
+    '.ReactModalPortal button:has-text("決定")',
+    'button:has-text("OK")',
+    'button:has-text("保存")',
+    'button:has-text("適用")',
+    'button:has-text("完了")',
+    '[data-testid="crop-confirm"]',
+  ];
+
+  let trimClosed = false;
+  for (const sel of trimConfirmSelectors) {
+    try {
+      const btn = page.locator(sel).first();
+      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await btn.click({ force: true });
+        logger.info(`トリミングダイアログを確認: ${sel}`);
+        trimClosed = true;
+        await page.waitForTimeout(2000);
+        break;
+      }
+    } catch {}
+  }
+
+  if (!trimClosed) {
+    // フォールバック: Escキーでダイアログを閉じる
+    logger.warn('トリミング確認ボタンが見つかりません。Escキーで閉じます...');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(2000);
+  }
+
+  // ダイアログが閉じたか確認
+  const stillHasCropper = await page.locator('[data-testid="cropper"], .reactEasyCrop_CropArea, [class*="cropper"]').first()
+    .isVisible({ timeout: 2000 }).catch(() => false);
+  if (stillHasCropper) {
+    logger.warn('トリミングダイアログがまだ表示されています。スクリーンショットを保存...');
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'cropper-stuck.png'), fullPage: true });
+    } catch { /* ignore */ }
+    // 最終手段: Enterキーで確定
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(2000);
   }
 }
 
@@ -1152,6 +1482,38 @@ export async function postToNote(article, imageFiles, options = {}) {
         await insertDiagramImage(page, diagram.imagePath, diagram.h2 || '', diagram.index);
         await sleep(2000);
       }
+    }
+
+    // --- API経由eyecatch設定（UIアップロード失敗時のフォールバック） ---
+    if (global.__pendingEyecatchKey) {
+      logger.info('API経由でアイキャッチ画像を設定中...');
+      try {
+        // 現在のURLから記事IDを取得（ドラフト保存でIDが割り当てられているはず）
+        const currentUrl = page.url();
+        const idMatch = currentUrl.match(/\/(\d+)/);
+        if (idMatch) {
+          const articleId = idMatch[1];
+          const apiResult = await page.evaluate(async ({ articleId, imageKey }) => {
+            try {
+              const response = await fetch(`https://note.com/api/v1/text_notes/draft_save?id=${articleId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ eyecatch_image_key: imageKey }),
+                credentials: 'include',
+              });
+              return { success: response.ok };
+            } catch (err) {
+              return { success: false, error: err.message };
+            }
+          }, { articleId, imageKey: global.__pendingEyecatchKey });
+          if (apiResult.success) {
+            logger.info(`API経由アイキャッチ設定成功: articleId=${articleId}`);
+          }
+        }
+      } catch (e) {
+        logger.warn(`API eyecatch設定失敗: ${e.message}`);
+      }
+      global.__pendingEyecatchKey = null;
     }
 
     // --- 「公開に進む」をクリック ---

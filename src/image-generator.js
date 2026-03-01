@@ -106,14 +106,59 @@ async function generateImage(prompt, outputPath, referenceImages = [], retries =
 }
 
 /**
+ * タイトルを短縮して画像用テキストを生成（15文字以内目安）
+ * 例: 「【2026年版】バイブコーディングの始め方完全ガイド！未経験から最短5ステップ」
+ *   → 「バイブコーディング入門」
+ */
+function shortenTitle(title) {
+  if (!title) return '';
+
+  // 【】や括弧、「！」以降を除去
+  let short = title
+    .replace(/【[^】]*】/g, '')
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/[！!].*/g, '')
+    .replace(/[？?].*/g, '')
+    .trim();
+
+  // 「完全ガイド」「徹底解説」等の修飾語を除去
+  const removePatterns = [
+    '完全ガイド', '徹底解説', '完全版', '保存版', '決定版',
+    '最新版', '入門ガイド', 'まとめ', '一覧',
+    '未経験から', '初心者向け', '初心者必見',
+    '最短', 'ステップ', 'おすすめ',
+  ];
+  for (const pat of removePatterns) {
+    short = short.replace(pat, '');
+  }
+
+  // 数字+パターンを除去（「5つの」「10選」等）
+  short = short.replace(/\d+つの|の\d+選|\d+選/g, '');
+
+  // 余計な記号を除去
+  short = short.replace(/[〜～・、。,.\s]+$/g, '').trim();
+
+  // 15文字以内にカット
+  if (short.length > 15) {
+    short = short.slice(0, 15);
+  }
+
+  return short;
+}
+
+/**
  * アイキャッチ画像を生成
  */
 export async function generateEyecatch(keyword, title, outputDir) {
   mkdirSync(outputDir, { recursive: true });
   const outputPath = resolve(outputDir, 'eyecatch.png');
 
+  // タイトルを短縮して画像用テキストを生成
+  const shortTitle = shortenTitle(title);
+  logger.info(`アイキャッチ短縮タイトル: "${shortTitle}"`);
+
   const template = loadPrompt('image-eyecatch');
-  const prompt = renderPrompt(template, { keyword, title });
+  const prompt = renderPrompt(template, { keyword, title, shortTitle });
 
   // アイキャッチ用の参照画像を読み込み
   const refImages = loadReferenceImages('eyecatch');
