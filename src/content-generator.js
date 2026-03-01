@@ -3,6 +3,7 @@ import config from './config.js';
 import logger from './logger.js';
 import { loadPrompt, renderPrompt } from './prompt-manager.js';
 import { formatAnalysisForPrompt, formatLatestNewsForPrompt } from './competitor-analyzer.js';
+import { getSetting } from './settings-manager.js';
 
 const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
 const textModel = genAI.getGenerativeModel({ model: config.gemini.textModel });
@@ -75,13 +76,19 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
     )
     .join('\n\n');
 
+  // 設定のターゲット読者が優先、なければAI分析結果を使用
+  const targetAudience = baseVars.settingsTargetAudience || searchIntent.targetAudience || '';
+  if (baseVars.settingsTargetAudience) {
+    logger.info(`ターゲット読者（設定値）: ${baseVars.settingsTargetAudience}`);
+  }
+
   const template = loadPrompt('article-body');
   const prompt = renderPrompt(template, {
     ...baseVars,
     title,
     outline: outlineText,
     userNeeds: searchIntent.userNeeds,
-    targetAudience: searchIntent.targetAudience,
+    targetAudience,
   });
 
   const result = await textModel.generateContent(prompt);
@@ -185,6 +192,9 @@ export async function generateArticle(keyword, analysisData, context = {}) {
     logger.info(`最新情報をプロンプトに反映: ${latestNewsText.length}文字`);
   }
 
+  // 設定からターゲット読者を取得
+  const settingsTargetAudience = getSetting('article.targetAudience', '');
+
   // 全ステップ共通の変数
   const baseVars = {
     keyword: keyword || '(キーワード未指定)',
@@ -193,6 +203,7 @@ export async function generateArticle(keyword, analysisData, context = {}) {
     latestNews: latestNewsText,
     minLength: String(config.posting.minLength),
     maxLength: String(config.posting.maxLength),
+    settingsTargetAudience,
   };
 
   // STEP 1: 検索意図分析

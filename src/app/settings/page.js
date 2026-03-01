@@ -364,6 +364,8 @@ export default function SettingsPage() {
       'article.minLength': settings.article.minLength,
       'article.maxLength': settings.article.maxLength,
       'article.defaultCategory': settings.article.defaultCategory,
+      'article.targetAudience': settings.article.targetAudience || '',
+      'article.defaultHashtags': settings.article.defaultHashtags || '',
       'knowledge.maxFileSizeKB': settings.knowledge.maxFileSizeKB,
       'knowledge.maxTotalChars': settings.knowledge.maxTotalChars,
       'posting.cronSchedule': cron,
@@ -673,10 +675,34 @@ export default function SettingsPage() {
               className="input-field"
             />
           </Field>
+          <Field label="ターゲット読者">
+            <input
+              type="text"
+              value={settings.article.targetAudience || ''}
+              onChange={(e) => updateField('article.targetAudience', e.target.value)}
+              className="input-field"
+              placeholder="例: 副業を始めたい20〜30代のサラリーマン"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              記事の対象読者を指定すると、読者に合わせた文体・内容で記事が生成されます
+            </p>
+          </Field>
           <Field label="デフォルトハッシュタグ">
             <input
               type="text"
-              value={settings.article.defaultCategory}
+              value={settings.article.defaultHashtags || ''}
+              onChange={(e) => updateField('article.defaultHashtags', e.target.value)}
+              className="input-field"
+              placeholder="例: バイブコーディング,生成AI,AI活用"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              カンマ区切りで入力。投稿時に自動でハッシュタグとして設定されます
+            </p>
+          </Field>
+          <Field label="noteカテゴリ（レガシー）">
+            <input
+              type="text"
+              value={settings.article.defaultCategory || ''}
               onChange={(e) => updateField('article.defaultCategory', e.target.value)}
               className="input-field"
               placeholder="未設定"

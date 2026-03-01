@@ -923,51 +923,100 @@ async function setHashtags(page, category) {
     const tags = category.split(/[,、\s]+/).filter(t => t.trim());
     if (tags.length === 0) return;
 
-    logger.info(`ハッシュタグを設定中: ${tags.join(', ')}`);
+    logger.info(`ハッシュタグを設定中: ${tags.join(', ')} (${tags.length}個)`);
+
+    // デバッグ: 公開設定画面のinput要素を列挙
+    const pageInputs = await page.evaluate(() => {
+      const inputs = Array.from(document.querySelectorAll('input'));
+      return inputs
+        .filter(i => i.offsetParent !== null)
+        .map(i => ({
+          type: i.type,
+          placeholder: i.placeholder,
+          class: i.className.slice(0, 80),
+          name: i.name,
+          id: i.id,
+        }));
+    }).catch(() => []);
+    logger.info(`公開設定画面のinput要素: ${JSON.stringify(pageInputs)}`);
 
     const hashtagSelectors = [
       'input[placeholder*="ハッシュタグ"]',
       'input[placeholder*="タグ"]',
+      'input[placeholder*="hashtag"]',
+      'input[placeholder*="tag"]',
       '[data-testid="hashtag-input"]',
       '[class*="hashtag"] input',
-      '[class*="tag"] input',
+      '[class*="tag"] input[type="text"]',
+      // note.comの公開設定画面: テキスト入力欄（タイトル以外）
+      'input[type="text"]:not([readonly])',
     ];
 
     let inputEl = null;
     for (const sel of hashtagSelectors) {
       try {
-        const el = page.locator(sel).first();
-        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
-          inputEl = el;
-          break;
+        const els = page.locator(sel);
+        const count = await els.count().catch(() => 0);
+        for (let i = 0; i < count; i++) {
+          const el = els.nth(i);
+          if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
+            // placeholder にハッシュタグ関連の文言が含まれているか確認
+            const placeholder = await el.getAttribute('placeholder').catch(() => '');
+            if (placeholder && (placeholder.includes('ハッシュタグ') || placeholder.includes('タグ') || placeholder.includes('tag'))) {
+              inputEl = el;
+              logger.info(`ハッシュタグ入力欄を検出: ${sel} (placeholder: ${placeholder})`);
+              break;
+            }
+            // 最初のフォールバック候補
+            if (!inputEl) {
+              inputEl = el;
+            }
+          }
         }
+        if (inputEl) break;
       } catch {}
     }
 
     if (!inputEl) {
       logger.warn('ハッシュタグ入力欄が見つかりません');
+      try {
+        await page.screenshot({ path: resolve(config.paths.logs, 'hashtag-input-not-found.png'), fullPage: true });
+      } catch { /* ignore */ }
       return;
     }
 
     for (const tag of tags) {
+      const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
       await inputEl.click();
       await page.waitForTimeout(300);
-      await inputEl.fill(tag.startsWith('#') ? tag.slice(1) : tag);
-      await page.waitForTimeout(500);
+      await inputEl.fill(cleanTag);
+      await page.waitForTimeout(800);
       await page.keyboard.press('Enter');
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
+      logger.info(`ハッシュタグ追加: ${cleanTag}`);
     }
+
+    // ハッシュタグが設定されたか確認のスクリーンショット
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'hashtags-set.png'), fullPage: true });
+    } catch { /* ignore */ }
 
     logger.info('ハッシュタグ設定完了');
   } catch (err) {
     logger.warn(`ハッシュタグ設定エラー: ${err.message}`);
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'hashtag-error.png'), fullPage: true });
+    } catch { /* ignore */ }
   }
 }
 
 /**
  * 記事を note.com に投稿
+ * @param {object} article - 記事データ
+ * @param {object} imageFiles - 画像ファイルパス
+ * @param {object} options - オプション { hashtags: 'タグ1,タグ2' }
  */
-export async function postToNote(article, imageFiles) {
+export async function postToNote(article, imageFiles, options = {}) {
   logger.info(`=== Note投稿開始: "${article.title}" ===`);
 
   if (config.dryRun) {
@@ -1160,62 +1209,132 @@ export async function postToNote(article, imageFiles) {
     await page.waitForTimeout(3000);
 
     // --- ハッシュタグ設定 ---
-    const category = config.posting.category || '';
-    if (category) {
-      await setHashtags(page, category);
+    const hashtags = options.hashtags || config.posting.category || '';
+    if (hashtags) {
+      await setHashtags(page, hashtags);
+    } else {
+      logger.info('ハッシュタグ未設定（スキップ）');
     }
+
+    // --- 公開設定画面のデバッグ ---
+    logger.info('公開設定画面の状態を確認中...');
+    const publishPageButtons = await page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button'));
+      return buttons
+        .filter(b => b.offsetParent !== null)
+        .map(b => ({ text: b.textContent.trim().slice(0, 60), class: b.className.slice(0, 80), disabled: b.disabled }))
+        .slice(0, 25);
+    }).catch(() => []);
+    logger.info(`公開設定画面のボタン: ${JSON.stringify(publishPageButtons)}`);
+
+    // デバッグ用スクリーンショット（公開直前）
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'before-publish.png'), fullPage: true });
+      logger.info('公開直前のスクリーンショットを保存: logs/before-publish.png');
+    } catch { /* ignore */ }
 
     // --- 「投稿する」をクリック ---
     logger.info('記事を投稿中...');
-    const publishBtn = page.locator('button:has-text("投稿する")').first();
-    try {
-      await publishBtn.waitFor({ state: 'visible', timeout: 15000 });
-      // ボタンがenabledになるまで待機
-      for (let i = 0; i < 30; i++) {
-        if (await publishBtn.isEnabled()) break;
-        await page.waitForTimeout(200);
+
+    // note.comの公開ボタンを探す（複数パターン対応）
+    const publishSelectors = [
+      'button:has-text("投稿する")',
+      'button:has-text("公開する")',
+      'button:has-text("公開")',
+      'button:has-text("投稿")',
+    ];
+
+    let publishClicked = false;
+    for (const sel of publishSelectors) {
+      try {
+        const btn = page.locator(sel).first();
+        const isVisible = await btn.isVisible({ timeout: 5000 }).catch(() => false);
+        if (!isVisible) continue;
+
+        // ボタンがenabledになるまで待機
+        for (let i = 0; i < 30; i++) {
+          if (await btn.isEnabled()) break;
+          await page.waitForTimeout(200);
+        }
+
+        const isEnabled = await btn.isEnabled();
+        if (!isEnabled) {
+          logger.warn(`ボタン「${sel}」は無効状態です。スキップ...`);
+          continue;
+        }
+
+        await btn.click({ force: true });
+        logger.info(`「${sel}」をクリックしました`);
+        publishClicked = true;
+        break;
+      } catch (e) {
+        logger.warn(`ボタン「${sel}」クリック失敗: ${e.message.slice(0, 80)}`);
       }
-      await publishBtn.click({ force: true });
-      logger.info('「投稿する」をクリックしました');
-    } catch (e) {
-      logger.warn(`「投稿する」ボタンが見つかりません: ${e.message}`);
-      // フォールバック
-      const fallbackSubmit = [
-        'button:has-text("公開する")',
-        'button:has-text("公開")',
-      ];
-      for (const sel of fallbackSubmit) {
-        try {
-          const btn = page.locator(sel).first();
-          if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
-            await btn.click({ force: true });
-            logger.info(`フォールバック投稿ボタンをクリック: ${sel}`);
-            break;
-          }
-        } catch {}
-      }
+    }
+
+    if (!publishClicked) {
+      logger.warn('公開ボタンが見つかりませんでした');
+      try {
+        await page.screenshot({ path: resolve(config.paths.logs, 'publish-button-failed.png'), fullPage: true });
+        logger.info('公開ボタン未検出のスクリーンショットを保存: logs/publish-button-failed.png');
+      } catch { /* ignore */ }
     }
 
     // 投稿完了を待機（URL変更 or 「投稿しました」メッセージ）
     logger.info('投稿完了を待機中...');
     await Promise.race([
-      page.waitForURL(url => !/\/publish/i.test(url.toString()) && !/\/edit/i.test(url.toString()), { timeout: 20000 }),
-      page.locator('text=投稿しました').first().waitFor({ timeout: 15000 }),
-      page.waitForTimeout(10000),
+      page.waitForURL(url => {
+        const urlStr = url.toString();
+        return !urlStr.includes('/editor/') && !urlStr.includes('/publish') && !urlStr.includes('/edit');
+      }, { timeout: 30000 }),
+      page.locator('text=投稿しました').first().waitFor({ timeout: 20000 }),
+      page.locator('text=公開しました').first().waitFor({ timeout: 20000 }),
+      page.waitForTimeout(15000),
     ]).catch(() => {});
 
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
 
     const finalUrl = page.url();
-    const isPublished = !finalUrl.includes('/edit') && !finalUrl.includes('/publish');
+    const isPublished = !finalUrl.includes('/edit') && !finalUrl.includes('/publish') && !finalUrl.includes('/editor/');
+
+    // 公開後のデバッグスクリーンショット
+    try {
+      await page.screenshot({ path: resolve(config.paths.logs, 'post-result.png'), fullPage: true });
+      logger.info('投稿結果のスクリーンショットを保存: logs/post-result.png');
+    } catch { /* ignore */ }
+
     if (isPublished) {
       logger.info(`投稿成功！記事URL: ${finalUrl}`);
     } else {
       logger.warn(`投稿が完了していない可能性があります。最終URL: ${finalUrl}`);
-      try {
-        await page.screenshot({ path: resolve(config.paths.logs, 'post-result.png'), fullPage: true });
-        logger.info('投稿結果のスクリーンショットを保存: logs/post-result.png');
-      } catch { /* ignore */ }
+
+      // 確認ダイアログが表示されている可能性 → もう一度投稿ボタンを押す
+      logger.info('確認ダイアログの有無を確認中...');
+      const confirmBtns = [
+        'button:has-text("投稿する")',
+        'button:has-text("公開する")',
+        'button:has-text("OK")',
+        'button:has-text("はい")',
+        '.ReactModalPortal button:has-text("投稿")',
+        '.ReactModalPortal button:has-text("公開")',
+      ];
+      for (const sel of confirmBtns) {
+        try {
+          const btn = page.locator(sel).first();
+          if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+            await btn.click({ force: true });
+            logger.info(`確認ボタンをクリック: ${sel}`);
+            await page.waitForTimeout(5000);
+            break;
+          }
+        } catch {}
+      }
+
+      // 再度URLチェック
+      const finalUrl2 = page.url();
+      if (!finalUrl2.includes('/edit') && !finalUrl2.includes('/publish') && !finalUrl2.includes('/editor/')) {
+        logger.info(`投稿成功（リトライ）！記事URL: ${finalUrl2}`);
+      }
     }
 
     // セッション保存

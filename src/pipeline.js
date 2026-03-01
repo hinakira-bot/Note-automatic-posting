@@ -5,6 +5,7 @@ import { generateAllImages } from './image-generator.js';
 import { postToNote } from './note-poster.js';
 import { logPost } from './post-logger.js';
 import { loadAllKnowledge } from './knowledge-manager.js';
+import { getSetting } from './settings-manager.js';
 import config from './config.js';
 import logger from './logger.js';
 
@@ -145,7 +146,15 @@ export async function runPipeline(options = {}) {
       postResult = { success: true, dryRun: true };
       onProgress?.({ message: '[ドライラン] 投稿スキップ', progress: 95 });
     } else {
-      postResult = await postToNote(article, imageFiles);
+      // 設定からハッシュタグを取得
+      const defaultHashtags = getSetting('article.defaultHashtags', '');
+      const defaultCategory = getSetting('article.defaultCategory', '');
+      const hashtags = defaultHashtags || defaultCategory || config.posting.category || '';
+      if (hashtags) {
+        logger.info(`ハッシュタグ設定: ${hashtags}`);
+      }
+
+      postResult = await postToNote(article, imageFiles, { hashtags });
       if (postResult.success) {
         onProgress?.({ message: '投稿完了', progress: 95 });
       } else {

@@ -9,6 +9,8 @@ const DEFAULT_SETTINGS = {
     minLength: 2000,
     maxLength: 4000,
     defaultCategory: '',
+    targetAudience: '',
+    defaultHashtags: '',
   },
   knowledge: {
     maxFileSizeKB: 100,
