@@ -100,6 +100,9 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
   const afterPCount = (bodyHtml.match(/<p>/gi) || []).length;
   logger.info(`1文改段落処理: ${beforePCount}段落 → ${afterPCount}段落 (${afterPCount - beforePCount}段落増加)`);
 
+  // プレーンURLをテキストリンクに変換（<a>タグ内のURLは除外）
+  bodyHtml = convertPlainUrlsToLinks(bodyHtml);
+
   return bodyHtml;
 }
 
@@ -174,6 +177,43 @@ function splitSentencesToParagraphs(html) {
   );
 
   return result;
+}
+
+/**
+ * プレーンURL（<a>タグで囲まれていないURL）をテキストリンクに変換
+ * 例: <p>https://example.com</p> → <p><a href="https://example.com">こちらのリンク</a></p>
+ * 例: <p>詳しくは https://example.com をご覧ください</p>
+ *   → <p>詳しくは <a href="https://example.com">こちら</a> をご覧ください</p>
+ */
+function convertPlainUrlsToLinks(html) {
+  // <a>タグ内のURLはスキップし、それ以外のURLをリンクに変換
+  // 1. まず<a>タグ部分を一時的にプレースホルダーに置換
+  const aTagPlaceholders = [];
+  let processed = html.replace(/<a\s[^>]*>[\s\S]*?<\/a>/gi, (match) => {
+    aTagPlaceholders.push(match);
+    return `__ATAG_PLACEHOLDER_${aTagPlaceholders.length - 1}__`;
+  });
+
+  // 2. プレーンURLを検出してリンクに変換
+  const urlRegex = /(https?:\/\/[^\s<>"'）」』】\)]+)/g;
+  let convertCount = 0;
+  processed = processed.replace(urlRegex, (url) => {
+    convertCount++;
+    // URLの前後のテキストから適切なリンクテキストを推測
+    // シンプルに「こちら」テキストリンクにする
+    return `<a href="${url}">こちらのリンク</a>`;
+  });
+
+  // 3. <a>タグプレースホルダーを復元
+  for (let i = 0; i < aTagPlaceholders.length; i++) {
+    processed = processed.replace(`__ATAG_PLACEHOLDER_${i}__`, aTagPlaceholders[i]);
+  }
+
+  if (convertCount > 0) {
+    logger.info(`プレーンURL→リンク変換: ${convertCount}件`);
+  }
+
+  return processed;
 }
 
 /**

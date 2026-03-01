@@ -35,8 +35,11 @@
 
 ## 要件
 - 合計{{minLength}}〜{{maxLength}}文字
-- HTML形式で出力（<h2>, <h3>, <p>, <ul>, <li>, <strong>, <blockquote>, <code> タグを使用）
+- HTML形式で出力（<h2>, <h3>, <p>, <ul>, <li>, <strong>, <blockquote>, <code>, <a> タグを使用）
 - note.comのエディタで正しく表示されるシンプルなHTMLにする
+- **URLは必ず<a>タグのテキストリンクにすること（URLをそのまま表示しない）**
+  - 例: NG → `https://example.com` / OK → `<a href="https://example.com">こちらのリンク</a>`
+  - ナレッジ内にURLがある場合も、テキストリンクとして出力すること
 
 ### 記事構成の順序（厳守）
 - **最初に導入文（リード文）を<p>タグで書く（100〜200文字、2〜4文）**
