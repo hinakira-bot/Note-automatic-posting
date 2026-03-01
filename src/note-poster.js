@@ -940,40 +940,26 @@ async function setHashtags(page, category) {
     }).catch(() => []);
     logger.info(`公開設定画面のinput要素: ${JSON.stringify(pageInputs)}`);
 
+    // note.com公開設定画面のハッシュタグ入力欄セレクタ
+    // 実際のUI: placeholder="ハッシュタグを追加する"
     const hashtagSelectors = [
+      'input[placeholder="ハッシュタグを追加する"]',
       'input[placeholder*="ハッシュタグ"]',
-      'input[placeholder*="タグ"]',
-      'input[placeholder*="hashtag"]',
-      'input[placeholder*="tag"]',
+      'input[placeholder*="タグを追加"]',
       '[data-testid="hashtag-input"]',
       '[class*="hashtag"] input',
-      '[class*="tag"] input[type="text"]',
-      // note.comの公開設定画面: テキスト入力欄（タイトル以外）
-      'input[type="text"]:not([readonly])',
     ];
 
     let inputEl = null;
     for (const sel of hashtagSelectors) {
       try {
-        const els = page.locator(sel);
-        const count = await els.count().catch(() => 0);
-        for (let i = 0; i < count; i++) {
-          const el = els.nth(i);
-          if (await el.isVisible({ timeout: 2000 }).catch(() => false)) {
-            // placeholder にハッシュタグ関連の文言が含まれているか確認
-            const placeholder = await el.getAttribute('placeholder').catch(() => '');
-            if (placeholder && (placeholder.includes('ハッシュタグ') || placeholder.includes('タグ') || placeholder.includes('tag'))) {
-              inputEl = el;
-              logger.info(`ハッシュタグ入力欄を検出: ${sel} (placeholder: ${placeholder})`);
-              break;
-            }
-            // 最初のフォールバック候補
-            if (!inputEl) {
-              inputEl = el;
-            }
-          }
+        const el = page.locator(sel).first();
+        if (await el.isVisible({ timeout: 3000 }).catch(() => false)) {
+          inputEl = el;
+          const placeholder = await el.getAttribute('placeholder').catch(() => '');
+          logger.info(`ハッシュタグ入力欄を検出: ${sel} (placeholder: ${placeholder})`);
+          break;
         }
-        if (inputEl) break;
       } catch {}
     }
 
@@ -989,11 +975,25 @@ async function setHashtags(page, category) {
       const cleanTag = tag.startsWith('#') ? tag.slice(1) : tag;
       await inputEl.click();
       await page.waitForTimeout(300);
+      // fill()でクリアしてからタグテキストを入力
+      await inputEl.fill('');
+      await page.waitForTimeout(200);
       await inputEl.fill(cleanTag);
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(500);
+      // Enterキーでタグを確定（note.comはEnterでタグ追加）
       await page.keyboard.press('Enter');
-      await page.waitForTimeout(800);
-      logger.info(`ハッシュタグ追加: ${cleanTag}`);
+      await page.waitForTimeout(1000);
+
+      // タグが追加されたか確認（入力欄がクリアされていればOK）
+      const inputValue = await inputEl.inputValue().catch(() => '');
+      if (inputValue === '') {
+        logger.info(`ハッシュタグ追加成功: #${cleanTag}`);
+      } else {
+        logger.warn(`ハッシュタグ追加未確認: #${cleanTag} (入力欄値: "${inputValue}")`);
+        // もう一度Enterを試す
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(500);
+      }
     }
 
     // ハッシュタグが設定されたか確認のスクリーンショット
@@ -1236,12 +1236,15 @@ export async function postToNote(article, imageFiles, options = {}) {
     // --- 「投稿する」をクリック ---
     logger.info('記事を投稿中...');
 
-    // note.comの公開ボタンを探す（複数パターン対応）
+    // note.comの公開ボタンを探す
+    // 実際のUI: 新規投稿→「公開」、編集→「更新する」（右上ボタン）
     const publishSelectors = [
-      'button:has-text("投稿する")',
+      'button:text-is("公開")',
+      'button:text-is("投稿")',
       'button:has-text("公開する")',
+      'button:has-text("投稿する")',
+      'button:has-text("更新する")',
       'button:has-text("公開")',
-      'button:has-text("投稿")',
     ];
 
     let publishClicked = false;
