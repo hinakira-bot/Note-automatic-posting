@@ -618,9 +618,10 @@ async function insertBodyContent(page, bodyHtml) {
  *
  * @param {import('playwright').Page} page
  * @param {string} imagePath - 画像ファイルのパス
- * @param {string} h2Text - 対応するh2見出しテキスト（位置特定用）
+ * @param {string} h2Text - 対応するh2見出しテキスト（ログ用）
+ * @param {number} h2Index - アウトラインでのh2インデックス（位置特定用）
  */
-async function insertDiagramImage(page, imagePath, h2Text) {
+async function insertDiagramImage(page, imagePath, h2Text, h2Index = -1) {
   if (!imagePath || !existsSync(imagePath)) return false;
 
   try {
@@ -637,9 +638,8 @@ async function insertDiagramImage(page, imagePath, h2Text) {
     await page.waitForTimeout(500);
 
     // === Step 2: カーソルを挿入位置に配置 ===
-    // ProseMirrorは独自の状態管理をするため、DOM Selection APIではなく
-    // Playwrightのlocator.click()でProseMirrorのイベントハンドラを経由する
-    const cursorResult = await page.evaluate((targetH2) => {
+    // h2Indexを使って直接エディタ内のh2要素を特定する（テキストマッチは誤配置の原因）
+    const cursorResult = await page.evaluate(({ targetH2, targetIndex }) => {
       const editor = document.querySelector('.ProseMirror') ||
                      document.querySelector('div[contenteditable="true"][role="textbox"]');
       if (!editor) return { type: 'not_found' };
@@ -660,17 +660,31 @@ async function insertDiagramImage(page, imagePath, h2Text) {
         }
       }
 
-      // h2のインデックスを返す（Playwrightのlocatorで直接クリックするため）
+      // インデックスでh2を直接特定（テキストマッチより確実）
+      const headings = editor.querySelectorAll('h2');
+      if (targetIndex >= 0 && targetIndex < headings.length) {
+        const h2 = headings[targetIndex];
+        return { type: 'h2_found', index: targetIndex, text: h2.textContent.trim().slice(0, 30) };
+      }
+
+      // インデックスが無効な場合、テキストでフォールバック（完全一致優先）
       if (targetH2) {
-        const headings = editor.querySelectorAll('h2');
         for (let i = 0; i < headings.length; i++) {
-          if (headings[i].textContent.trim().includes(targetH2.slice(0, 15))) {
-            return { type: 'h2_found', index: i, text: headings[i].textContent.trim().slice(0, 30) };
+          const hText = headings[i].textContent.trim();
+          if (hText === targetH2) {
+            return { type: 'h2_found', index: i, text: hText.slice(0, 30) };
+          }
+        }
+        // 部分一致（長めに比較）
+        for (let i = 0; i < headings.length; i++) {
+          const hText = headings[i].textContent.trim();
+          if (hText.includes(targetH2.slice(0, 30)) || targetH2.includes(hText.slice(0, 30))) {
+            return { type: 'h2_found', index: i, text: hText.slice(0, 30) };
           }
         }
       }
       return { type: 'not_found' };
-    }, h2Text);
+    }, { targetH2: h2Text, targetIndex: h2Index });
 
     if (cursorResult.type === 'placeholder') {
       // プレースホルダーを削除して空の段落にする
@@ -1078,12 +1092,16 @@ export async function postToNote(article, imageFiles) {
     await insertBodyContent(page, article.bodyHtml);
 
     // --- 図解画像の挿入（オプション） ---
+    // 逆順で挿入（後ろのh2から処理することで、前のh2のインデックスがずれない）
     if (imageFiles.diagrams && imageFiles.diagrams.length > 0) {
-      for (const diagram of imageFiles.diagrams) {
-        if (diagram.imagePath) {
-          await insertDiagramImage(page, diagram.imagePath, diagram.h2 || '');
-          await sleep(2000);
-        }
+      const diagramsToInsert = imageFiles.diagrams
+        .filter(d => d.imagePath)
+        .reverse(); // 逆順（後ろの見出しから）
+
+      for (const diagram of diagramsToInsert) {
+        logger.info(`図解挿入: index=${diagram.index}, h2="${(diagram.h2 || '').slice(0, 25)}"`);
+        await insertDiagramImage(page, diagram.imagePath, diagram.h2 || '', diagram.index);
+        await sleep(2000);
       }
     }
 

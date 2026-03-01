@@ -62,13 +62,13 @@ async function generateImage(prompt, outputPath, referenceImages = [], retries =
       // テキストパートを作成
       const parts = [];
 
-      // 参照画像がある場合、先に画像を追加
+      // 参照画像がある場合、先に画像を追加（ただし影響を弱めに）
       if (referenceImages.length > 0) {
-        parts.push({ text: `以下の参照画像のスタイル・テイスト・色使いを参考にして、新しい画像を生成してください。参照画像と同じ画像は作らず、あくまでスタイルの参考として使ってください。\n\n` });
+        parts.push({ text: `以下の参照画像は「品質レベル」と「全体的な雰囲気」の参考です。\n重要: 参照画像の構図・色・レイアウトをコピーしないでください。毎回まったく異なるデザイン・配色・構図にしてください。参照画像はあくまで品質の目安であり、見た目を真似るものではありません。\n\n` });
         for (const img of referenceImages) {
           parts.push(img);
         }
-        parts.push({ text: `\n上記の参照画像のスタイルを踏まえて、以下の内容で新しい画像を生成してください:\n\n${prompt}` });
+        parts.push({ text: `\n上記は品質の参考です。以下の内容で、参照画像とは全く異なる構図・配色・表現で新しい画像を生成してください:\n\n${prompt}` });
       } else {
         parts.push({ text: prompt });
       }
