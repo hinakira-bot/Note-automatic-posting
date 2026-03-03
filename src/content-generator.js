@@ -94,6 +94,9 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
   const result = await textModel.generateContent(prompt);
   let bodyHtml = result.response.text().replace(/```html\n?/g, '').replace(/```\n?/g, '').trim();
 
+  // テーブルを箇条書きに変換（note.comはtable非対応）
+  bodyHtml = convertTablesToLists(bodyHtml);
+
   // 1文ずつ改段落に変換（スマホ読みやすさ対応）
   const beforePCount = (bodyHtml.match(/<p>/gi) || []).length;
   bodyHtml = splitSentencesToParagraphs(bodyHtml);
@@ -221,6 +224,85 @@ function insertNewsletterCTA(html) {
   logger.info('メルマガCTA挿入: 記事末尾');
 
   return html;
+}
+
+/**
+ * HTMLテーブルを箇条書き（<ul><li>）に変換
+ * note.comのエディタは<table>タグに対応していないため、
+ * AIがテーブルを生成してしまった場合のフォールバック処理
+ *
+ * 変換ロジック:
+ * - <th> のセルはヘッダー行として <strong> で強調
+ * - <td> のセルは「ヘッダー: 値」形式で箇条書き化
+ * - ヘッダー行がない場合はセル内容をそのまま列挙
+ */
+function convertTablesToLists(html) {
+  const tableRegex = /<table[\s\S]*?<\/table>/gi;
+  const tables = html.match(tableRegex);
+  if (!tables) return html;
+
+  let convertCount = 0;
+
+  const result = html.replace(tableRegex, (tableHtml) => {
+    convertCount++;
+
+    // 行を抽出
+    const rows = [];
+    const rowRegex = /<tr[\s>][\s\S]*?<\/tr>/gi;
+    let rowMatch;
+    while ((rowMatch = rowRegex.exec(tableHtml)) !== null) {
+      const cells = [];
+      const cellRegex = /<(th|td)[\s>][\s\S]*?<\/\1>/gi;
+      let cellMatch;
+      while ((cellMatch = cellRegex.exec(rowMatch[0])) !== null) {
+        const isHeader = cellMatch[1].toLowerCase() === 'th';
+        // セル内のHTMLタグを除去してテキスト取得（<strong>等は残す）
+        const cellText = cellMatch[0]
+          .replace(/<\/?(?:th|td)[\s>][^>]*>/gi, '')
+          .replace(/<\/?(?:th|td)>/gi, '')
+          .trim();
+        cells.push({ text: cellText, isHeader });
+      }
+      if (cells.length > 0) rows.push(cells);
+    }
+
+    if (rows.length === 0) return '';
+
+    // ヘッダー行を検出（全セルがthの行）
+    const headerRow = rows[0]?.every(c => c.isHeader) ? rows[0] : null;
+    const dataRows = headerRow ? rows.slice(1) : rows;
+
+    // 箇条書きに変換
+    const listItems = [];
+
+    for (const row of dataRows) {
+      if (headerRow && row.length === headerRow.length) {
+        // ヘッダーと値をペアにして表示
+        const parts = row.map((cell, i) => {
+          const header = headerRow[i]?.text;
+          if (header && cell.text) {
+            return `<strong>${header}</strong>: ${cell.text}`;
+          }
+          return cell.text;
+        }).filter(Boolean);
+        listItems.push(parts.join(' / '));
+      } else {
+        // ヘッダーなし: セル内容を結合
+        const text = row.map(c => c.text).filter(Boolean).join(' / ');
+        if (text) listItems.push(text);
+      }
+    }
+
+    if (listItems.length === 0) return '';
+
+    return '<ul>\n' + listItems.map(item => `<li>${item}</li>`).join('\n') + '\n</ul>';
+  });
+
+  if (convertCount > 0) {
+    logger.info(`テーブル→箇条書き変換: ${convertCount}件`);
+  }
+
+  return result;
 }
 
 /**
