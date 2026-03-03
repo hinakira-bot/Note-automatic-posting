@@ -1,9 +1,9 @@
 import { getNextKeyword, getKeywordById, markAsPosted, markAsFailed } from './keyword-manager.js';
-import { analyzeCompetitors, searchLatestNews } from './competitor-analyzer.js';
+import { analyzeCompetitors, searchLatestNews, searchEvidence } from './competitor-analyzer.js';
 import { generateArticle } from './content-generator.js';
 import { generateAllImages } from './image-generator.js';
 import { postToNote } from './note-poster.js';
-import { logPost } from './post-logger.js';
+import { logPost, getArticleIndex, getArticleIndexForPrompt } from './post-logger.js';
 import { loadAllKnowledge } from './knowledge-manager.js';
 import { getSetting } from './settings-manager.js';
 import config from './config.js';
@@ -101,24 +101,42 @@ export async function runPipeline(options = {}) {
       };
     }
 
-    // === STEP 1.5: 最新情報検索 ===
+    // === STEP 1.5 + 1.6: 最新情報検索 & エビデンス検索（並列） ===
     let latestNews = null;
+    let evidenceData = null;
     if (keyword) {
-      onProgress?.({ step: 'analysis', message: '最新情報を検索中...', progress: 28 });
-      logger.info('--- STEP 1.5: 最新情報検索 ---');
-      latestNews = await searchLatestNews(keyword);
+      onProgress?.({ step: 'analysis', message: '最新情報・エビデンスを検索中...', progress: 28 });
+      logger.info('--- STEP 1.5+1.6: 最新情報検索(JP+EN) & エビデンス検索（並列） ---');
+      [latestNews, evidenceData] = await Promise.all([
+        searchLatestNews(keyword),
+        searchEvidence(keyword),
+      ]);
       const newsCount = latestNews?.latestNews?.length || 0;
+      const evidenceCount = evidenceData?.evidence?.length || 0;
       logger.info(`最新情報: ${newsCount}件取得`);
-      onProgress?.({ message: `最新情報: ${newsCount}件取得`, progress: 32 });
+      logger.info(`エビデンス: ${evidenceCount}件取得`);
+      onProgress?.({ message: `最新情報: ${newsCount}件, エビデンス: ${evidenceCount}件`, progress: 32 });
     }
 
-    // === STEP 2: 記事生成（description + knowledge + latestNews を渡す） ===
+    // === STEP 1.7: 既存記事インデックス取得 ===
+    logger.info('--- STEP 1.7: 既存記事インデックス取得 ---');
+    const articleIndex = getArticleIndex();
+    const existingArticles = getArticleIndexForPrompt();
+    logger.info(`既存記事: ${articleIndex.length}件`);
+    if (articleIndex.length > 0) {
+      onProgress?.({ message: `既存記事: ${articleIndex.length}件（内部リンク候補）`, progress: 33 });
+    }
+
+    // === STEP 2: 記事生成（description + knowledge + latestNews + evidence + existingArticles を渡す） ===
     onProgress?.({ step: 'content', message: '記事生成中...', progress: 35 });
     logger.info('--- STEP 2: 記事生成 ---');
     const article = await generateArticle(keyword, analysisData, {
       description,
       knowledge,
       latestNews,
+      evidence: evidenceData,
+      existingArticles,
+      articleIndex,
       mode,
     });
     onProgress?.({ message: `記事生成完了: ${article.title}`, progress: 60, title: article.title });

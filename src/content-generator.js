@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import config from './config.js';
 import logger from './logger.js';
 import { loadPrompt, renderPrompt } from './prompt-manager.js';
-import { formatAnalysisForPrompt, formatLatestNewsForPrompt } from './competitor-analyzer.js';
+import { formatAnalysisForPrompt, formatLatestNewsForPrompt, formatEvidenceForPrompt } from './competitor-analyzer.js';
 import { getSetting } from './settings-manager.js';
 
 const genAI = new GoogleGenerativeAI(config.gemini.apiKey);
@@ -105,6 +105,12 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
 
   // プレーンURLをテキストリンクに変換（<a>タグ内のURLは除外）
   bodyHtml = convertPlainUrlsToLinks(bodyHtml);
+
+  // 内部リンク検証（記事インデックスにないnote.comリンクを除去）
+  bodyHtml = validateInternalLinks(bodyHtml, baseVars._articleIndex || []);
+
+  // 空の関連記事セクションを除去
+  bodyHtml = removeEmptyRelatedBoxes(bodyHtml);
 
   // メルマガCTAを挿入（最初のh2前 + 記事末尾）
   bodyHtml = insertNewsletterCTA(bodyHtml);
@@ -343,19 +349,77 @@ function convertPlainUrlsToLinks(html) {
 }
 
 /**
+ * 内部リンク検証: 記事インデックスにないnote.comリンクをテキストのみに変換
+ * AIが捏造したnote.com URLを除去する安全策
+ */
+function validateInternalLinks(html, articleIndex) {
+  if (!articleIndex || articleIndex.length === 0) return html;
+
+  // 記事インデックスのURLセットを作成
+  const validUrls = new Set(articleIndex.map(a => a.url));
+
+  let removeCount = 0;
+  const result = html.replace(/<a\s+href="(https?:\/\/note\.com\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (match, url, text) => {
+    if (validUrls.has(url)) {
+      return match; // 有効なリンク → そのまま
+    }
+    removeCount++;
+    return text; // リンクタグを除去、テキストのみ残す
+  });
+
+  if (removeCount > 0) {
+    logger.info(`内部リンク検証: ${removeCount}件の無効リンクを除去`);
+  }
+
+  return result;
+}
+
+/**
+ * 空の関連記事セクション除去
+ * 「関連記事」等のh3見出しの後にリンクがない場合に除去
+ */
+function removeEmptyRelatedBoxes(html) {
+  // 「関連記事」「あわせて読みたい」等のh3 + 直後のリンクなしpを検出して除去
+  const result = html.replace(
+    /<h3>[^<]*(?:関連記事|あわせて読|おすすめ記事|合わせて読)[^<]*<\/h3>\s*(?:<p>[^<]*<\/p>\s*)*(?=<h[23]|$)/gi,
+    (match) => {
+      // マッチ内に<a>タグがあれば残す
+      if (/<a\s/i.test(match)) return match;
+      logger.info('空の関連記事セクションを除去');
+      return '';
+    }
+  );
+  return result;
+}
+
+/**
  * 記事全体を生成するメインフロー
  * @param {string} keyword - キーワード（空の場合あり）
  * @param {object} analysisData - 競合分析データ
- * @param {object} context - {description, knowledge, latestNews, mode}
+ * @param {object} context - {description, knowledge, latestNews, evidence, existingArticles, articleIndex, mode}
  */
 export async function generateArticle(keyword, analysisData, context = {}) {
-  const { description = '', knowledge = '', latestNews = null, mode = 'keyword-only' } = context;
+  const {
+    description = '',
+    knowledge = '',
+    latestNews = null,
+    evidence = null,
+    existingArticles = '',
+    articleIndex = [],
+    mode = 'keyword-only',
+  } = context;
   logger.info(`=== 記事生成開始: "${keyword || description.slice(0, 30)}" (${mode}) ===`);
 
   // 最新情報をテキスト化
   const latestNewsText = latestNews ? formatLatestNewsForPrompt(latestNews) : '';
   if (latestNewsText) {
     logger.info(`最新情報をプロンプトに反映: ${latestNewsText.length}文字`);
+  }
+
+  // エビデンス情報をテキスト化
+  const evidenceText = evidence ? formatEvidenceForPrompt(evidence) : '';
+  if (evidenceText) {
+    logger.info(`エビデンス情報をプロンプトに反映: ${evidenceText.length}文字`);
   }
 
   // 設定からターゲット読者を取得
@@ -367,9 +431,12 @@ export async function generateArticle(keyword, analysisData, context = {}) {
     description,
     knowledge,
     latestNews: latestNewsText,
+    evidence: evidenceText,
+    existingArticles,
     minLength: String(config.posting.minLength),
     maxLength: String(config.posting.maxLength),
     settingsTargetAudience,
+    _articleIndex: articleIndex,
   };
 
   // STEP 1: 検索意図分析
