@@ -1702,6 +1702,13 @@ export async function postToNote(article, imageFiles, options = {}) {
       }
     }
 
+    // 最終的な公開URLを取得（リトライ後のURLが公開URLの場合はそちらを優先）
+    const currentUrl = page.url();
+    const publicUrl = (!currentUrl.includes('/edit') && !currentUrl.includes('/publish') && !currentUrl.includes('/editor/'))
+      ? currentUrl.replace(/\?.*$/, '')  // クエリパラメータ除去
+      : finalUrl;
+    logger.info(`保存するURL: ${publicUrl}`);
+
     // セッション保存
     try {
       await saveSession(context);
@@ -1710,7 +1717,7 @@ export async function postToNote(article, imageFiles, options = {}) {
     }
 
     await browser.close();
-    return { success: true, url: finalUrl, title: article.title };
+    return { success: true, url: publicUrl, title: article.title };
   } catch (err) {
     logger.error(`投稿エラー: ${err.message}`);
     logger.error(err.stack);
