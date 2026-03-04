@@ -110,40 +110,132 @@ async function generateImage(prompt, outputPath, referenceImages = [], retries =
  * 例: 「【2026年版】バイブコーディングの始め方完全ガイド！未経験から最短5ステップ」
  *   → 「バイブコーディング入門」
  */
+/**
+ * タイトルを画像表示用に短縮・整形
+ * 長いタイトルは2行に分割し、文字数に応じたサイズガイドを付与
+ * @returns {{ mainTitle: string, subTitle: string, sizeGuide: string }}
+ */
 function shortenTitle(title) {
-  if (!title) return '';
+  if (!title) return { mainTitle: '', subTitle: '', sizeGuide: 'large' };
 
-  // 【】や括弧、「！」以降を除去
-  let short = title
+  // 【】や括弧を除去
+  let clean = title
     .replace(/【[^】]*】/g, '')
     .replace(/\[[^\]]*\]/g, '')
-    .replace(/[！!].*/g, '')
-    .replace(/[？?].*/g, '')
     .trim();
 
-  // 「完全ガイド」「徹底解説」等の修飾語を除去
+  // 「完全ガイド」「徹底解説」等の末尾修飾語を除去
   const removePatterns = [
     '完全ガイド', '徹底解説', '完全版', '保存版', '決定版',
     '最新版', '入門ガイド', 'まとめ', '一覧',
-    '未経験から', '初心者向け', '初心者必見',
-    '最短', 'ステップ', 'おすすめ',
+    '未経験から', '初心者必見', '完全解説',
   ];
   for (const pat of removePatterns) {
-    short = short.replace(pat, '');
+    clean = clean.replace(pat, '');
   }
 
-  // 数字+パターンを除去（「5つの」「10選」等）
-  short = short.replace(/\d+つの|の\d+選|\d+選/g, '');
+  // 数字パターンを除去（「5選」「12選」「4ステップ」等）
+  clean = clean.replace(/\d+つの|\d+選|\d+ステップ|\d+個/g, '');
 
   // 余計な記号を除去
-  short = short.replace(/[〜～・、。,.\s]+$/g, '').trim();
+  clean = clean.replace(/[〜～・、。,.\s]+$/g, '').trim();
 
-  // 15文字以内にカット
-  if (short.length > 15) {
-    short = short.slice(0, 15);
+  let mainTitle = '';
+  let subTitle = '';
+
+  // === 分割ロジック ===
+
+  // Step 1: 区切り文字（！？｜—）で分割を試みる
+  const separators = [
+    { char: '！', include: true },
+    { char: '!', include: true },
+    { char: '？', include: true },
+    { char: '?', include: true },
+    { char: '｜', include: false },
+    { char: '|', include: false },
+    { char: '—', include: false },
+  ];
+  for (const { char, include } of separators) {
+    const idx = clean.indexOf(char);
+    if (idx > 0 && idx < clean.length - 1) {
+      mainTitle = clean.slice(0, idx + (include ? 1 : 0)).trim();
+      subTitle = clean.slice(idx + 1).trim();
+      break;
+    }
   }
 
-  return short;
+  // Step 2: 区切り文字がない場合の分割
+  if (!mainTitle) {
+    if (clean.length <= 11) {
+      // 11文字以下 → 1行でOK
+      mainTitle = clean;
+    } else {
+      // 22文字を超える場合、まず22文字以内に自然にトリムする
+      let target = clean;
+      if (target.length > 22) {
+        // 助詞の直後で切れる位置を探す（16〜22文字目）
+        const splitChars = ['の', 'で', 'を', 'は', 'が', 'と', 'に', 'な'];
+        let cutPoint = 22;
+        for (let i = 22; i >= 16; i--) {
+          if (splitChars.includes(target[i])) {
+            cutPoint = i + 1;
+            break;
+          }
+        }
+        target = target.slice(0, cutPoint);
+      }
+
+      // targetを2行に分割
+      const midPoint = Math.ceil(target.length / 2);
+      const splitChars = ['の', 'で', 'を', 'は', 'が', 'と', 'に', 'な', '×', ' '];
+      let bestSplit = -1;
+      let bestDist = target.length;
+
+      for (let i = Math.max(3, midPoint - 4); i <= Math.min(target.length - 3, midPoint + 4); i++) {
+        if (splitChars.includes(target[i])) {
+          const dist = Math.abs(i + 1 - midPoint);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestSplit = i + 1;
+          }
+        }
+      }
+
+      if (bestSplit > 0) {
+        mainTitle = target.slice(0, bestSplit).trim();
+        subTitle = target.slice(bestSplit).trim();
+      } else {
+        // 助詞なし → 中央で分割
+        mainTitle = target.slice(0, midPoint);
+        subTitle = target.slice(midPoint);
+      }
+    }
+  }
+
+  // Step 3: サブタイトルが短すぎる場合（2文字以下）はメインに統合
+  if (subTitle && subTitle.length <= 2) {
+    mainTitle = (mainTitle + subTitle);
+    subTitle = '';
+  }
+
+  // Step 4: 各行を最大11文字に制限（見切れ防止）
+  if (mainTitle.length > 11) mainTitle = mainTitle.slice(0, 11);
+  if (subTitle.length > 11) subTitle = subTitle.slice(0, 11);
+
+  // サイズガイド判定
+  const totalChars = mainTitle.length + subTitle.length;
+  let sizeGuide;
+  if (totalChars <= 8) {
+    sizeGuide = 'extra-large'; // 特大フォント
+  } else if (totalChars <= 14) {
+    sizeGuide = 'large';       // 大フォント
+  } else if (totalChars <= 20) {
+    sizeGuide = 'medium';      // 中フォント
+  } else {
+    sizeGuide = 'compact';     // コンパクトフォント
+  }
+
+  return { mainTitle, subTitle, sizeGuide };
 }
 
 /**
@@ -154,11 +246,18 @@ export async function generateEyecatch(keyword, title, outputDir) {
   const outputPath = resolve(outputDir, 'eyecatch.png');
 
   // タイトルを短縮して画像用テキストを生成
-  const shortTitle = shortenTitle(title);
-  logger.info(`アイキャッチ短縮タイトル: "${shortTitle}"`);
+  const { mainTitle, subTitle, sizeGuide } = shortenTitle(title);
+  logger.info(`アイキャッチ: メイン="${mainTitle}" (${mainTitle.length}文字), サブ="${subTitle}" (${subTitle.length}文字), サイズ=${sizeGuide}`);
 
   const template = loadPrompt('image-eyecatch');
-  const prompt = renderPrompt(template, { keyword, title, shortTitle });
+  const prompt = renderPrompt(template, {
+    keyword,
+    title,
+    mainTitle,
+    subTitle,
+    sizeGuide,
+    hasSubTitle: subTitle ? 'true' : '',
+  });
 
   // アイキャッチ用の参照画像を読み込み
   const refImages = loadReferenceImages('eyecatch');
