@@ -11,6 +11,8 @@ const TEMPLATE_NAMES = [
   'article-outline',
   'article-title',
   'article-body',
+  'article-lead',
+  'article-summary',
   'image-eyecatch',
   'image-diagram',
 ];

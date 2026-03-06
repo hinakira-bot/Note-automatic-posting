@@ -1225,6 +1225,32 @@ async function insertDiagramImage(page, imagePath, h2Text, h2Index = -1) {
         }
       }
 
+      // === Step 4.5: h2直後の空パラグラフを除去（余白除去） ===
+      try {
+        const removedCount = await page.evaluate(() => {
+          const editor = document.querySelector('.ProseMirror');
+          if (!editor) return 0;
+          let removed = 0;
+          const h2s = editor.querySelectorAll('h2');
+          h2s.forEach(h2 => {
+            let next = h2.nextElementSibling;
+            // h2の直後にある空の<p>要素を削除（画像やテキストを含むものはスキップ）
+            while (next && next.tagName === 'P' && (!next.textContent || !next.textContent.trim()) && !next.querySelector('img, figure, iframe')) {
+              const toRemove = next;
+              next = next.nextElementSibling;
+              toRemove.remove();
+              removed++;
+            }
+          });
+          return removed;
+        });
+        if (removedCount > 0) {
+          logger.info(`h2直後の空パラグラフを${removedCount}個除去しました`);
+        }
+      } catch (cleanErr) {
+        logger.warn(`h2空パラグラフ除去エラー: ${cleanErr.message}`);
+      }
+
       logger.info(`図解画像を挿入しました: ${imagePath}`);
       return true;
     }
@@ -1481,6 +1507,31 @@ export async function postToNote(article, imageFiles, options = {}) {
         logger.info(`図解挿入: index=${diagram.index}, h2="${(diagram.h2 || '').slice(0, 25)}"`);
         await insertDiagramImage(page, diagram.imagePath, diagram.h2 || '', diagram.index);
         await sleep(2000);
+      }
+
+      // 全図解挿入後の最終クリーンアップ: h2直後の空パラグラフを一括除去
+      try {
+        const finalCleanCount = await page.evaluate(() => {
+          const editor = document.querySelector('.ProseMirror');
+          if (!editor) return 0;
+          let removed = 0;
+          const h2s = editor.querySelectorAll('h2');
+          h2s.forEach(h2 => {
+            let next = h2.nextElementSibling;
+            while (next && next.tagName === 'P' && (!next.textContent || !next.textContent.trim()) && !next.querySelector('img, figure, iframe')) {
+              const toRemove = next;
+              next = next.nextElementSibling;
+              toRemove.remove();
+              removed++;
+            }
+          });
+          return removed;
+        });
+        if (finalCleanCount > 0) {
+          logger.info(`最終クリーンアップ: h2直後の空パラグラフを${finalCleanCount}個除去`);
+        }
+      } catch (e) {
+        logger.warn(`最終クリーンアップエラー: ${e.message}`);
       }
     }
 

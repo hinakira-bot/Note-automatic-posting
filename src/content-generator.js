@@ -82,6 +82,12 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
     logger.info(`ターゲット読者（設定値）: ${baseVars.settingsTargetAudience}`);
   }
 
+  // リード文・まとめ文の個別プロンプトを読み込み
+  let leadInstruction = '';
+  let summaryInstruction = '';
+  try { leadInstruction = loadPrompt('article-lead'); } catch { /* デフォルトルールで生成 */ }
+  try { summaryInstruction = loadPrompt('article-summary'); } catch { /* デフォルトルールで生成 */ }
+
   const template = loadPrompt('article-body');
   const prompt = renderPrompt(template, {
     ...baseVars,
@@ -89,6 +95,8 @@ async function generateBody(keyword, title, outline, searchIntent, baseVars) {
     outline: outlineText,
     userNeeds: searchIntent.userNeeds,
     targetAudience,
+    leadInstruction,
+    summaryInstruction,
   });
 
   const result = await textModel.generateContent(prompt);
