@@ -366,6 +366,14 @@ export default function SettingsPage() {
       'article.defaultCategory': settings.article.defaultCategory,
       'article.targetAudience': settings.article.targetAudience || '',
       'article.defaultHashtags': settings.article.defaultHashtags || '',
+      'cta.enabled': settings.cta?.enabled !== false,
+      'cta.url': settings.cta?.url || '',
+      'cta.shortLinkText': settings.cta?.shortLinkText || '',
+      'cta.shortPrefix': settings.cta?.shortPrefix ?? '▶ ',
+      'cta.detailedIntro': settings.cta?.detailedIntro || '',
+      'cta.detailedBenefitsIntro': settings.cta?.detailedBenefitsIntro || '',
+      'cta.detailedBenefits': settings.cta?.detailedBenefits || [],
+      'cta.detailedOutro': settings.cta?.detailedOutro || '',
       'knowledge.maxFileSizeKB': settings.knowledge.maxFileSizeKB,
       'knowledge.maxTotalChars': settings.knowledge.maxTotalChars,
       'posting.cronSchedule': cron,
@@ -708,6 +716,117 @@ export default function SettingsPage() {
               placeholder="未設定"
             />
           </Field>
+        </Section>
+
+        {/* CTA設定 */}
+        <Section title="CTA設定（記事内リンク）">
+          <div className="text-sm text-gray-600 mb-3">
+            記事の最初のh2見出し前と末尾に自動挿入されるCTA（Call to Action）の内容を設定します。
+          </div>
+          <Field label="CTA有効">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.cta?.enabled !== false}
+                onChange={(e) => updateField('cta.enabled', e.target.checked)}
+                className="w-4 h-4 text-blue-600 rounded"
+              />
+              <span className="text-sm text-gray-600">記事にCTAを自動挿入する</span>
+            </label>
+          </Field>
+          <Field label="リンクURL">
+            <input
+              type="url"
+              value={settings.cta?.url || ''}
+              onChange={(e) => updateField('cta.url', e.target.value)}
+              className="input-field"
+              placeholder="https://example.com/subscribe"
+            />
+          </Field>
+          <Field label="リンクテキスト">
+            <input
+              type="text"
+              value={settings.cta?.shortLinkText || ''}
+              onChange={(e) => updateField('cta.shortLinkText', e.target.value)}
+              className="input-field"
+              placeholder="例: AIを学び、使えるようになるメルマガ登録はこちら"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              短いCTA・詳細CTA両方のリンクテキストに使用されます
+            </p>
+          </Field>
+          <Field label="リンク前の装飾文字">
+            <input
+              type="text"
+              value={settings.cta?.shortPrefix ?? '▶ '}
+              onChange={(e) => updateField('cta.shortPrefix', e.target.value)}
+              className="input-field"
+              placeholder="例: ▶ "
+            />
+          </Field>
+          <Field label="詳細CTA 導入文">
+            <textarea
+              value={settings.cta?.detailedIntro || ''}
+              onChange={(e) => updateField('cta.detailedIntro', e.target.value)}
+              className="input-field"
+              rows={2}
+              placeholder="例: もっと詳しく学びたい方は、ぜひメルマガに登録してみてくださいね。"
+            />
+            <p className="text-xs text-gray-500 mt-1">記事末尾CTAの冒頭に表示されるテキスト</p>
+          </Field>
+          <Field label="詳細CTA 特典紹介文">
+            <input
+              type="text"
+              value={settings.cta?.detailedBenefitsIntro || ''}
+              onChange={(e) => updateField('cta.detailedBenefitsIntro', e.target.value)}
+              className="input-field"
+              placeholder="例: 登録特典がかなり充実しています。"
+            />
+          </Field>
+          <Field label="詳細CTA 特典リスト">
+            <textarea
+              value={(settings.cta?.detailedBenefits || []).join('\n')}
+              onChange={(e) => updateField('cta.detailedBenefits', e.target.value.split('\n').filter(s => s.trim()))}
+              className="input-field"
+              rows={4}
+              placeholder="1行に1つずつ入力&#10;例:&#10;GPTsの作り方動画をプレゼント&#10;有料レベルのAIツールが使える&#10;限定オープンチャットへご案内"
+            />
+            <p className="text-xs text-gray-500 mt-1">1行につき1つの特典。空にすると特典リストは非表示になります</p>
+          </Field>
+          <Field label="詳細CTA 締めの文">
+            <textarea
+              value={settings.cta?.detailedOutro || ''}
+              onChange={(e) => updateField('cta.detailedOutro', e.target.value)}
+              className="input-field"
+              rows={2}
+              placeholder="例: 随時プレゼントも配布しているので、登録しておくだけで「得」できますよ〜。"
+            />
+          </Field>
+
+          {/* プレビュー */}
+          {settings.cta?.enabled !== false && settings.cta?.url && (
+            <div className="bg-gray-50 rounded-lg p-4 mt-2">
+              <p className="text-xs font-medium text-gray-700 mb-2">プレビュー（記事末尾CTA）</p>
+              <div className="text-sm text-gray-800 space-y-1 border-l-4 border-blue-300 pl-3">
+                {settings.cta?.detailedIntro && <p>{settings.cta.detailedIntro}</p>}
+                {settings.cta?.detailedBenefitsIntro && <p>{settings.cta.detailedBenefitsIntro}</p>}
+                {(settings.cta?.detailedBenefits || []).length > 0 && (
+                  <ul className="list-disc list-inside">
+                    {settings.cta.detailedBenefits.map((b, i) => (
+                      <li key={i}><strong>{b}</strong></li>
+                    ))}
+                  </ul>
+                )}
+                {settings.cta?.detailedOutro && <p>{settings.cta.detailedOutro}</p>}
+                <p>
+                  {settings.cta?.shortPrefix ?? '▶ '}
+                  <a href={settings.cta.url} className="text-blue-600 underline" target="_blank" rel="noopener noreferrer">
+                    {settings.cta?.shortLinkText || '(リンクテキスト未設定)'}
+                  </a>
+                </p>
+              </div>
+            </div>
+          )}
         </Section>
 
         {/* ナレッジ設定 */}

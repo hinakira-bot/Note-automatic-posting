@@ -200,42 +200,55 @@ function splitSentencesToParagraphs(html) {
 }
 
 /**
- * メルマガCTAを記事本文に挿入
+ * CTAを記事本文に挿入
  * - 最初の<h2>の直前（導入文の後）に短いCTA
  * - 記事末尾に詳細な登録特典付きCTA
+ * 設定画面からCTAの内容を変更可能
  */
 function insertNewsletterCTA(html) {
-  const NEWSLETTER_URL = 'https://hinakira.net/p/r/RwKLzKtX';
+  const ctaEnabled = getSetting('cta.enabled', true);
+  if (!ctaEnabled) {
+    logger.info('CTA挿入: 無効（設定でOFF）');
+    return html;
+  }
+
+  const ctaUrl = getSetting('cta.url', 'https://hinakira.net/p/r/RwKLzKtX');
+  const shortLinkText = getSetting('cta.shortLinkText', 'AIを学び、使えるようになるメルマガ登録はこちら');
+  const shortPrefix = getSetting('cta.shortPrefix', '▶ ');
+  const detailedIntro = getSetting('cta.detailedIntro', '');
+  const detailedBenefitsIntro = getSetting('cta.detailedBenefitsIntro', '');
+  const detailedBenefits = getSetting('cta.detailedBenefits', []);
+  const detailedOutro = getSetting('cta.detailedOutro', '');
 
   // --- 短いCTA（最初のh2の直前） ---
-  const shortCTA = [
-    '<p>▶ <a href="' + NEWSLETTER_URL + '">AIを学び、使えるようになるメルマガ登録はこちら</a></p>',
-  ].join('\n');
+  const shortCTA = `<p>${shortPrefix}<a href="${ctaUrl}">${shortLinkText}</a></p>`;
 
   // --- 詳細CTA（記事末尾） ---
-  const detailedCTA = [
-    '<p>AIについてもっと詳しく学びたい方、僕が作ったツールを使ってみたい方は、ぜひメルマガに登録してみてくださいね。</p>',
-    '<p>登録特典がかなり充実しています。</p>',
-    '<ul>',
-    '<li><strong>GPTsの作り方動画</strong>をプレゼント</li>',
-    '<li><strong>有料レベルのAIツール</strong>が使える</li>',
-    '<li><strong>限定オープンチャット</strong>へご案内</li>',
-    '</ul>',
-    '<p>さらに、随時プロンプトやAIツールのプレゼントも配布しているので、登録しておくだけで「得」できますよ〜。</p>',
-    '<p>▶ <a href="' + NEWSLETTER_URL + '">AIを学び、使えるようになるメルマガ登録はこちら</a></p>',
-  ].join('\n');
+  const detailedParts = [];
+  if (detailedIntro) detailedParts.push(`<p>${detailedIntro}</p>`);
+  if (detailedBenefitsIntro) detailedParts.push(`<p>${detailedBenefitsIntro}</p>`);
+  if (detailedBenefits.length > 0) {
+    detailedParts.push('<ul>');
+    for (const benefit of detailedBenefits) {
+      detailedParts.push(`<li><strong>${benefit}</strong></li>`);
+    }
+    detailedParts.push('</ul>');
+  }
+  if (detailedOutro) detailedParts.push(`<p>${detailedOutro}</p>`);
+  detailedParts.push(`<p>${shortPrefix}<a href="${ctaUrl}">${shortLinkText}</a></p>`);
+  const detailedCTA = detailedParts.join('\n');
 
   // 最初の<h2>を見つけて直前にCTAを挿入
   const firstH2Match = html.match(/<h2[\s>]/i);
   if (firstH2Match) {
     const insertPos = html.indexOf(firstH2Match[0]);
     html = html.slice(0, insertPos) + shortCTA + '\n' + html.slice(insertPos);
-    logger.info('メルマガCTA挿入: 最初のh2前');
+    logger.info('CTA挿入: 最初のh2前');
   }
 
   // 記事末尾にCTAを追加
   html = html + '\n' + detailedCTA;
-  logger.info('メルマガCTA挿入: 記事末尾');
+  logger.info('CTA挿入: 記事末尾');
 
   return html;
 }

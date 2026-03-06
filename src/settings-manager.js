@@ -12,6 +12,20 @@ const DEFAULT_SETTINGS = {
     targetAudience: '',
     defaultHashtags: '',
   },
+  cta: {
+    enabled: true,
+    url: 'https://hinakira.net/p/r/RwKLzKtX',
+    shortLinkText: 'AIを学び、使えるようになるメルマガ登録はこちら',
+    shortPrefix: '▶ ',
+    detailedIntro: 'AIについてもっと詳しく学びたい方、僕が作ったツールを使ってみたい方は、ぜひメルマガに登録してみてくださいね。',
+    detailedBenefitsIntro: '登録特典がかなり充実しています。',
+    detailedBenefits: [
+      'GPTsの作り方動画をプレゼント',
+      '有料レベルのAIツールが使える',
+      '限定オープンチャットへご案内',
+    ],
+    detailedOutro: 'さらに、随時プロンプトやAIツールのプレゼントも配布しているので、登録しておくだけで「得」できますよ〜。',
+  },
   knowledge: {
     maxFileSizeKB: 100,
     maxTotalChars: 50000,
